@@ -136,17 +136,17 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('I need **Manage Roles** permission to assign the jail role.');
         }
-
+        
         const jailRoleName = 'Jailed';
         const jailRole = message.guild.roles.cache.find(role => role.name === jailRoleName);
 
         if (!jailRole) {
-            return message.reply(`Could not find a role named "${jailRoleName}". Please create it first.`);
+            return message.reply(`Could not find a role named "${jailRoleName}".`);
         }
 
         const highestBotRole = botMember.roles.highest;
         if (jailRole.position >= highestBotRole.position) {
-            return message.reply(`The ${jailRoleName} role is higher than or equal to my highest role. Please move my role above the ${jailRoleName} role.`);
+            return message.reply(`The ${jailRoleName} role is higher than or equal to my highest role.`);
         }
 
         if (targetMember.roles.cache.has(jailRole.id)) {
@@ -184,7 +184,7 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('I need **Manage Roles** permission to remove the jail role.');
         }
-
+        
         const jailRoleName = 'Jailed';
         const jailRole = message.guild.roles.cache.find(role => role.name === jailRoleName);
 
@@ -204,6 +204,5 @@ client.on('messageCreate', async (message) => {
             await message.reply('Failed to unjail user.');
         }
     }
-});
-
+    
 client.login(process.env.DISCORD_TOKEN);
