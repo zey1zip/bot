@@ -95,7 +95,7 @@ client.on('messageCreate', async (message) => {
             await targetMember.roles.remove(highestUserRole);
             await targetMember.roles.add(nextRole);
             
-            await message.reply(`**${targetMember.user.tag} has been promoted!**\n 📈 **Role change:** ${highestUserRole.name} → ${nextRole.name}\n 👤 **Moderator:** ${message.author.tag}`);
+            await message.reply(`**${targetMember.user.tag} has been promoted** **to** ${nextRole.name}\n **Moderator:** ${message.author.tag}`);
         } catch (error) {
             console.error(error);
             await message.reply('Failed to promote user.');
@@ -153,14 +153,14 @@ client.on('messageCreate', async (message) => {
         }
         
         if (!nextRole) {
-            return message.reply(`${targetMember.user.tag} already has the lowest role in the server!`);
+            return message.reply(`${targetMember.user.tag} already has the lowest role in the server.`);
         }
         
         // Check bot role hierarchy
         const highestBotRole = botMember.roles.highest;
         if (nextRole.position >= highestBotRole.position && nextRole.position !== lowestUserRole.position) {
             // This is a warning, but we can still try
-            console.log(`Warning: Next role ${nextRole.name} is high in hierarchy`);
+            console.log(`Next role ${nextRole.name} is high in hierarchy`);
         }
 
         try {
@@ -168,7 +168,7 @@ client.on('messageCreate', async (message) => {
             await targetMember.roles.remove(lowestUserRole);
             await targetMember.roles.add(nextRole);
             
-            await message.reply(`**${targetMember.user.tag} has been demoted!**\n 📉 **Role change:** ${lowestUserRole.name} → ${nextRole.name}\n 👤 **Moderator:** ${message.author.tag}`);
+            await message.reply(`**${targetMember.user.tag} has been demoted** **to** ${nextRole.name}\n **Moderator:** ${message.author.tag}`);
         } catch (error) {
             console.error(error);
             await message.reply('Failed to demote user.');
