@@ -10,7 +10,8 @@ const client = new Client({
 });
 
 const PREFIX = '.';
-const roleBackups = new Map();
+const roleBackups = new Map(); // For wipe/unwipe
+const jailBackups = new Map(); // For jail/unjail
 
 client.once('ready', () => {
     console.log(`${client.user.tag} is online!`);
