@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 const client = new Client({
     intents: [
@@ -581,6 +581,121 @@ client.on('messageCreate', async (message) => {
             .setDescription(description);
         
         await message.reply({ embeds: [embed] });
+    }
+
+    // ========== ROLES COMMAND ==========
+    if (command === 'roles') {
+        // Get all roles except @everyone
+        const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
+        const roleList = [...allRoles.values()].sort((a, b) => b.position - a.position);
+        
+        const itemsPerPage = 10;
+        const totalPages = Math.ceil(roleList.length / itemsPerPage);
+        
+        if (totalPages === 0) {
+            return message.reply('No roles found in this server.');
+        }
+        
+        let currentPage = 0;
+        
+        // Function to create the embed for a specific page
+        function createRoleEmbed(page) {
+            const start = page * itemsPerPage;
+            const end = start + itemsPerPage;
+            const pageRoles = roleList.slice(start, end);
+            
+            let roleText = '';
+            for (const role of pageRoles) {
+                roleText += `${role.toString()} - \`${role.members.size}\` members\n`;
+            }
+            
+            const embed = new EmbedBuilder()
+                .setTitle('LawsHub Roles')
+                .setDescription(`\`\`\`\n${roleText || 'No roles on this page'}\n\nPage ${page + 1}/${totalPages}\`\`\``)
+                .setColor(0x14004B);
+            
+            return embed;
+        }
+        
+        // Create buttons
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('prev_roles')
+                    .setEmoji('◀️')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(currentPage === 0),
+                new ButtonBuilder()
+                    .setCustomId('next_roles')
+                    .setEmoji('▶️')
+                    .setStyle(ButtonStyle.Secondary)
+                    .setDisabled(currentPage === totalPages - 1)
+            );
+        
+        // Send initial message
+        const sentMessage = await message.reply({
+            embeds: [createRoleEmbed(currentPage)],
+            components: [row]
+        });
+        
+        // Create button collector
+        const collector = sentMessage.createMessageComponentCollector({
+            time: 60000 // 60 seconds
+        });
+        
+        collector.on('collect', async (interaction) => {
+            if (interaction.user.id !== message.author.id) {
+                return interaction.reply({
+                    content: 'Only the user who ran the command can use these buttons.',
+                    ephemeral: true
+                });
+            }
+            
+            if (interaction.customId === 'prev_roles') {
+                currentPage--;
+            } else if (interaction.customId === 'next_roles') {
+                currentPage++;
+            }
+            
+            // Update buttons disabled state
+            const newRow = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('prev_roles')
+                        .setEmoji('◀️')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(currentPage === 0),
+                    new ButtonBuilder()
+                        .setCustomId('next_roles')
+                        .setEmoji('▶️')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(currentPage === totalPages - 1)
+                );
+            
+            await interaction.update({
+                embeds: [createRoleEmbed(currentPage)],
+                components: [newRow]
+            });
+        });
+        
+        collector.on('end', async () => {
+            // Disable buttons after timeout
+            const disabledRow = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId('prev_roles')
+                        .setEmoji('◀️')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(true),
+                    new ButtonBuilder()
+                        .setCustomId('next_roles')
+                        .setEmoji('▶️')
+                        .setStyle(ButtonStyle.Secondary)
+                        .setDisabled(true)
+                );
+            
+            await sentMessage.edit({ components: [disabledRow] }).catch(() => {});
+        });
     }
 });
 
