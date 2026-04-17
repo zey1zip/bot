@@ -18,6 +18,32 @@ client.once('ready', () => {
     console.log(`${client.user.tag} is online!`);
 });
 
+// Message delete snipe handler
+client.on('messageDelete', (message) => {
+    if (message.author?.bot) return;
+    if (!message.content || message.content.length === 0) return;
+    
+    const channelId = message.channel.id;
+    const snipeInfo = {
+        content: message.content,
+        author: message.author.tag,
+        authorId: message.author.id,
+        timestamp: Date.now()
+    };
+    
+    if (!snipeData.has(channelId)) {
+        snipeData.set(channelId, []);
+    }
+    
+    const channelSnipes = snipeData.get(channelId);
+    channelSnipes.unshift(snipeInfo);
+    
+    // Keep only last 10 snipes per channel
+    if (channelSnipes.length > 10) {
+        channelSnipes.pop();
+    }
+});
+
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     if (!message.content.startsWith(PREFIX)) return;
@@ -25,7 +51,6 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // ========== PROMOTE COMMAND ==========
     // ========== PROMOTE COMMAND ==========
     if (command === 'promote') {
         const targetMention = args[0];
@@ -181,7 +206,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== DEMOTE COMMAND ==========
     // ========== DEMOTE COMMAND ==========
     if (command === 'demote') {
         const targetMention = args[0];
@@ -518,6 +542,7 @@ client.on('messageCreate', async (message) => {
             console.error(error);
             await message.reply('Failed to unjail user.');
         }
+    }
 
     // ========== SNIPE COMMAND ==========
     if (command === 'snipe') {
@@ -538,20 +563,24 @@ client.on('messageCreate', async (message) => {
         for (let i = 0; i < snipeCount; i++) {
             const snipe = channelSnipes[i];
             const timeAgo = Math.floor((Date.now() - snipe.timestamp) / 1000);
-            const timeText = timeAgo < 60 ? `${timeAgo} seconds ago` : 
-                           timeAgo < 3600 ? `${Math.floor(timeAgo / 60)} minutes ago` :
-                           `${Math.floor(timeAgo / 3600)} hours ago`;
+            let timeText = '';
+            if (timeAgo < 60) {
+                timeText = `${timeAgo} seconds ago`;
+            } else if (timeAgo < 3600) {
+                timeText = `${Math.floor(timeAgo / 60)} minutes ago`;
+            } else {
+                timeText = `${Math.floor(timeAgo / 3600)} hours ago`;
+            }
             
-            description += `${snipe.author} : "${snipe.content}"\n-# ${timeText}\n\n`;
+            description += `**${snipe.author}:** ${snipe.content}\n-# ${timeText}\n\n`;
         }
         
         const embed = new EmbedBuilder()
             .setTitle('LawsHub Snipe')
             .setColor(0x14004B)
-            .setDescription(`Last ${snipeCount} deleted message${snipeCount !== 1 ? 's' : ''} :\n\`\`\`\n${description}\`\`\``);
+            .setDescription(description);
         
         await message.reply({ embeds: [embed] });
-    }
     }
 });
 
