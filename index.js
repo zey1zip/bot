@@ -10,10 +10,9 @@ const client = new Client({
 });
 
 const PREFIX = '.';
-
 const roleBackups = new Map();
 
-client.on('ready', () => {
+client.once('ready', () => {
     console.log(`${client.user.tag} is online!`);
 });
 
@@ -24,6 +23,7 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
+    // ========== WIPE COMMAND ==========
     if (command === 'wipe') {
         const targetMention = args[0];
         if (!targetMention) {
@@ -43,7 +43,7 @@ client.on('messageCreate', async (message) => {
 
         const botMember = await message.guild.members.fetch(client.user.id);
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
-            return message.reply('❌ I need **Manage Roles** permission.');
+            return message.reply('I need **Manage Roles** permission.');
         }
 
         const highestTargetRole = targetMember.roles.highest;
@@ -68,6 +68,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
+    // ========== UNWIPE COMMAND ==========
     if (command === 'unwipe') {
         const targetMention = args[0];
         if (!targetMention) {
@@ -83,11 +84,6 @@ client.on('messageCreate', async (message) => {
 
         if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('You need **Manage Roles** permission.');
-        }
-
-        const botMember = await message.guild.members.fetch(client.user.id);
-        if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
-            return message.reply('❌ I need **Manage Roles** permission.');
         }
 
         const backupRoleIds = roleBackups.get(targetMember.id);
@@ -109,9 +105,7 @@ client.on('messageCreate', async (message) => {
             }
 
             await targetMember.roles.add(rolesToRestore, `Restored by ${message.author.tag} (${message.author.id})`);
-
             roleBackups.delete(targetMember.id);
-
             await message.reply(`Successfully restored roles to ${targetMember.user.tag}`);
 
         } catch (error) {
@@ -119,7 +113,6 @@ client.on('messageCreate', async (message) => {
             await message.reply('Failed to restore roles.');
         }
     }
-});
 
     // ========== JAIL COMMAND ==========
     if (command === 'jail') {
@@ -135,7 +128,6 @@ client.on('messageCreate', async (message) => {
             return message.reply('Could not find user.');
         }
 
-        // Check permissions
         if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
             return message.reply('You need **Moderate Members** permission to jail someone.');
         }
@@ -144,20 +136,19 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('I need **Manage Roles** permission to assign the jail role.');
         }
-        
-        const jailRoleName = 'Jailed'; // Change this to your role name
+
+        const jailRoleName = 'Jailed';
         const jailRole = message.guild.roles.cache.find(role => role.name === jailRoleName);
 
         if (!jailRole) {
-            return message.reply(`Could not find a role named "${jailRoleName}".`);
+            return message.reply(`Could not find a role named "${jailRoleName}". Please create it first.`);
         }
 
         const highestBotRole = botMember.roles.highest;
         if (jailRole.position >= highestBotRole.position) {
-            return message.reply(`The ${jailRoleName} role is higher than or equal to my highest role.`);
+            return message.reply(`The ${jailRoleName} role is higher than or equal to my highest role. Please move my role above the ${jailRoleName} role.`);
         }
 
-        // Check if user already has the role
         if (targetMember.roles.cache.has(jailRole.id)) {
             return message.reply(`${targetMember.user.tag} is already jailed!`);
         }
@@ -185,7 +176,6 @@ client.on('messageCreate', async (message) => {
             return message.reply('Could not find user.');
         }
 
-        // Check permissions
         if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
             return message.reply('You need **Moderate Members** permission to unjail someone.');
         }
@@ -194,15 +184,14 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('I need **Manage Roles** permission to remove the jail role.');
         }
-        
-        const jailRoleName = 'Jailed'; // Must match the role name from jail command
+
+        const jailRoleName = 'Jailed';
         const jailRole = message.guild.roles.cache.find(role => role.name === jailRoleName);
 
         if (!jailRole) {
             return message.reply(`Could not find a role named "${jailRoleName}".`);
         }
 
-        // Check if user has the role
         if (!targetMember.roles.cache.has(jailRole.id)) {
             return message.reply(`${targetMember.user.tag} is not jailed.`);
         }
@@ -215,6 +204,6 @@ client.on('messageCreate', async (message) => {
             await message.reply('Failed to unjail user.');
         }
     }
-
+});
 
 client.login(process.env.DISCORD_TOKEN);
