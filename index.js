@@ -115,6 +115,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ========== JAIL COMMAND ==========
+    // ========== JAIL COMMAND ==========
     if (command === 'jail') {
         const targetMention = args[0];
         if (!targetMention) {
@@ -136,17 +137,17 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('I need **Manage Roles** permission to assign the jail role.');
         }
-        
+
         const jailRoleName = 'Jailed';
         const jailRole = message.guild.roles.cache.find(role => role.name === jailRoleName);
 
         if (!jailRole) {
-            return message.reply(`Could not find a role named "${jailRoleName}".`);
+            return message.reply(`Could not find a role named "${jailRoleName}". Please create it first.`);
         }
 
         const highestBotRole = botMember.roles.highest;
         if (jailRole.position >= highestBotRole.position) {
-            return message.reply(`The ${jailRoleName} role is higher than or equal to my highest role.`);
+            return message.reply(`The ${jailRoleName} role is higher than or equal to my highest role. Please move my role above the ${jailRoleName} role.`);
         }
 
         if (targetMember.roles.cache.has(jailRole.id)) {
@@ -154,8 +155,16 @@ client.on('messageCreate', async (message) => {
         }
 
         try {
-            await targetMember.roles.add(jailRole);
+            // Save all current roles (excluding @everyone and the jail role itself)
+            const rolesToBackup = targetMember.roles.cache.filter(role => role.name !== '@everyone' && role.id !== jailRole.id);
+            const roleIds = rolesToBackup.map(role => role.id);
+            jailBackups.set(targetMember.id, roleIds);
+
+            // Remove all roles and add only the jail role
+            await targetMember.roles.set([jailRole], `Jailed by ${message.author.tag} (${message.author.id})`);
+
             await message.reply(`**${targetMember.user.tag} has been jailed!**\n **Moderator:** ${message.author.tag}`);
+
         } catch (error) {
             console.error(error);
             await message.reply('Failed to jail user.');
@@ -184,7 +193,7 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
             return message.reply('I need **Manage Roles** permission to remove the jail role.');
         }
-        
+
         const jailRoleName = 'Jailed';
         const jailRole = message.guild.roles.cache.find(role => role.name === jailRoleName);
 
@@ -197,8 +206,27 @@ client.on('messageCreate', async (message) => {
         }
 
         try {
-            await targetMember.roles.remove(jailRole);
+            // Get the saved roles from backup
+            const backupRoleIds = jailBackups.get(targetMember.id);
+            const rolesToRestore = [];
+
+            if (backupRoleIds && backupRoleIds.length > 0) {
+                for (const roleId of backupRoleIds) {
+                    const role = message.guild.roles.cache.get(roleId);
+                    if (role) {
+                        rolesToRestore.push(role);
+                    }
+                }
+            }
+
+            // Remove jail role and add back original roles
+            await targetMember.roles.set(rolesToRestore, `Unjailed by ${message.author.tag} (${message.author.id})`);
+
+            // Clear the backup
+            jailBackups.delete(targetMember.id);
+
             await message.reply(`**${targetMember.user.tag} has been unjailed!**\n **Moderator:** ${message.author.tag}`);
+
         } catch (error) {
             console.error(error);
             await message.reply('Failed to unjail user.');
