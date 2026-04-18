@@ -504,11 +504,11 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== MUTE COMMAND ==========
+    // ========== MUTE COMMAND (Updated - Supports seconds, minutes, hours, days, weeks) ==========
     if (command === 'mute') {
         const userInput = args[0];
         if (!userInput) {
-            return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a user ID or mention a user to mute. Example: `.mute 123456789012345678 1h reason here` or `.mute @user 1h reason here`')] });
+            return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a user ID or mention a user to mute. Example: `.mute @user 30s reason here` or `.mute @user 5m reason here`\n\n**Formats:** s (seconds), m (minutes), h (hours), d (days), w (weeks)')] });
         }
 
         const userId = getUserIdFromInput(userInput);
@@ -542,11 +542,12 @@ client.on('messageCreate', async (message) => {
             return message.reply({ embeds: [createErrorEmbed('Error', `Cannot mute ${targetMember.user.tag} - they have a role higher than or equal to your highest role.`)] });
         }
 
+        // Parse duration (supports: s, m, h, d, w)
         let duration = args[1];
         let reasonStart = 2;
         let milliseconds = 0;
         
-        if (!duration || !duration.match(/^\d+[mhd]$/)) {
+        if (!duration || !duration.match(/^\d+[smhdw]$/)) {
             duration = '10m';
             reasonStart = 1;
         }
@@ -555,17 +556,33 @@ client.on('messageCreate', async (message) => {
         const durationUnit = duration.slice(-1);
         
         switch(durationUnit) {
+            case 's': milliseconds = durationValue * 1000; break;
             case 'm': milliseconds = durationValue * 60 * 1000; break;
             case 'h': milliseconds = durationValue * 60 * 60 * 1000; break;
             case 'd': milliseconds = durationValue * 24 * 60 * 60 * 1000; break;
+            case 'w': milliseconds = durationValue * 7 * 24 * 60 * 60 * 1000; break;
             default: milliseconds = 10 * 60 * 1000;
+        }
+        
+        // Max 28 days (Discord limit)
+        const maxMs = 28 * 24 * 60 * 60 * 1000;
+        if (milliseconds > maxMs) {
+            return message.reply({ embeds: [createErrorEmbed('Error', 'Maximum mute duration is 28 days. Please use a shorter duration.')] });
         }
         
         const reason = getReason(args.slice(reasonStart));
 
+        // Format duration text for display
+        let durationText = '';
+        if (durationUnit === 's') durationText = `${durationValue} second(s)`;
+        else if (durationUnit === 'm') durationText = `${durationValue} minute(s)`;
+        else if (durationUnit === 'h') durationText = `${durationValue} hour(s)`;
+        else if (durationUnit === 'd') durationText = `${durationValue} day(s)`;
+        else if (durationUnit === 'w') durationText = `${durationValue} week(s)`;
+        else durationText = `10 minute(s)`;
+
         try {
             await targetMember.timeout(milliseconds, `Muted by ${message.author.tag}: ${reason}`);
-            const durationText = `${durationValue}${durationUnit === 'm' ? ' minute(s)' : durationUnit === 'h' ? ' hour(s)' : ' day(s)'}`;
             const embed = createSuccessEmbed('User Muted', `**User:** ${targetMember.user.toString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Duration:** ${durationText}\n\n**Reason:** ${reason}`);
             await message.reply({ embeds: [embed] });
         } catch (error) {
