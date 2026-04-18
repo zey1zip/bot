@@ -24,9 +24,9 @@ let warns = new Map();
 // Auto-warn action configuration
 const warnActions = {
     3: { action: 'mute', duration: '1h', deleteWarns: true },
-    5: { action: 'mute', duration: '1d', deleteWarns: true },
+    5: { action: 'mute', duration: '5h', deleteWarns: true },
     6: { action: 'demote', deleteWarns: true },
-    7: { action: 'ban', deleteWarns: true }
+    9: { action: 'kick', deleteWarns: true }
 };
 
 // Load warnings from file
