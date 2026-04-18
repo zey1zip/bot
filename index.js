@@ -585,12 +585,16 @@ client.on('messageCreate', async (message) => {
 
     // ========== ROLES COMMAND ==========
     if (command === 'roles') {
+        // First, make sure we have all members cached
+        await message.guild.members.fetch();
+        
         // Get all roles except @everyone
         const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
         const roleList = [...allRoles.values()].sort((a, b) => b.position - a.position);
         
         const itemsPerPage = 10;
         const totalPages = Math.ceil(roleList.length / itemsPerPage);
+        const totalRoles = roleList.length;
         
         if (totalPages === 0) {
             return message.reply('No roles found in this server.');
@@ -606,12 +610,14 @@ client.on('messageCreate', async (message) => {
             
             let roleText = '';
             for (const role of pageRoles) {
-                roleText += `**${role.name}** - \`${role.members.size}\` members\n`;
+                // Get accurate member count
+                const memberCount = role.members.size;
+                roleText += `**${role.name}** - \`${memberCount}\` members\n`;
             }
             
             const embed = new EmbedBuilder()
                 .setTitle('LawsHub Roles')
-                .setDescription(`${roleText || 'No roles on this page'}\n\nPage ${page + 1}/${totalPages}`)
+                .setDescription(`${roleText || 'No roles on this page'}\n\n**Total Roles:** ${totalRoles}\n**Page:** ${page + 1}/${totalPages}`)
                 .setColor(0x14004B);
             
             return embed;
