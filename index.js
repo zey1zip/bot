@@ -1,4 +1,5 @@
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const fs = require('fs');
 
 const client = new Client({
     intents: [
@@ -14,7 +15,32 @@ const client = new Client({
 const PREFIX = '.';
 const roleBackups = new Map();
 const jailBackups = new Map();
-const warns = new Map();
+
+// Persistent warnings storage
+const WARNINGS_FILE = './warnings.json';
+let warns = new Map();
+
+// Load warnings from file
+function loadWarnings() {
+    if (fs.existsSync(WARNINGS_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(WARNINGS_FILE, 'utf8'));
+            warns = new Map(Object.entries(data));
+            console.log(`✅ Loaded ${warns.size} user warnings from file`);
+        } catch (e) {
+            console.log('No valid warnings file found, starting fresh');
+        }
+    }
+}
+
+// Save warnings to file
+function saveWarnings() {
+    const obj = Object.fromEntries(warns);
+    fs.writeFileSync(WARNINGS_FILE, JSON.stringify(obj, null, 2));
+    console.log(`💾 Saved warnings to file`);
+}
+
+loadWarnings();
 
 client.once('ready', () => {
     console.log(`${client.user.tag} is online!`);
@@ -38,12 +64,9 @@ function createErrorEmbed(title, description) {
     return embed;
 }
 
-// Helper function to get user ID from mention or raw ID
 function getUserIdFromInput(input) {
     if (!input) return null;
-    // Remove mention formatting <@!123> or <@123>
     let id = input.replace(/[<@!>]/g, '');
-    // Check if it's a valid Discord ID (17-20 digits)
     if (/^\d{17,20}$/.test(id)) {
         return id;
     }
@@ -61,6 +84,41 @@ client.on('messageCreate', async (message) => {
         const reason = argsArray.join(' ');
         if (!reason || reason.length === 0) return defaultReason;
         return reason;
+    }
+
+    // ========== PURGE COMMAND ==========
+    if (command === 'purge') {
+        const amount = parseInt(args[0]);
+        
+        if (!amount || isNaN(amount)) {
+            return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a number of messages to delete. Example: `.purge 10`')] });
+        }
+        
+        if (amount < 1 || amount > 100) {
+            return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a number between 1 and 100.')] });
+        }
+        
+        if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+            return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Manage Messages** permission to purge messages.')] });
+        }
+        
+        const botMember = await message.guild.members.fetch(client.user.id);
+        if (!botMember.permissions.has(PermissionFlagsBits.ManageMessages)) {
+            return message.reply({ embeds: [createErrorEmbed('Error', 'I need **Manage Messages** permission to purge messages.')] });
+        }
+        
+        try {
+            const fetched = await message.channel.messages.fetch({ limit: amount });
+            const deleted = await message.channel.bulkDelete(fetched, true);
+            
+            const embed = createSuccessEmbed('Messages Purged', `**Deleted:** ${deleted.size} messages\n**Channel:** ${message.channel.toString()}\n**Moderator:** ${message.author.toString()}`);
+            const reply = await message.channel.send({ embeds: [embed] });
+            
+            setTimeout(() => reply.delete().catch(() => {}), 5000);
+        } catch (error) {
+            console.error(error);
+            await message.reply({ embeds: [createErrorEmbed('Error', 'Failed to purge messages. Messages may be older than 14 days.')] });
+        }
     }
 
     // ========== PING COMMAND ==========
@@ -92,7 +150,7 @@ client.on('messageCreate', async (message) => {
         await sent.edit({ embeds: [embed] });
     }
 
-    // ========== BAN COMMAND (Works with ID and Mention) ==========
+    // ========== BAN COMMAND ==========
     if (command === 'ban') {
         const userInput = args[0];
         if (!userInput) {
@@ -222,7 +280,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== KICK COMMAND (Works with ID and Mention) ==========
+    // ========== KICK COMMAND ==========
     if (command === 'kick') {
         const userInput = args[0];
         if (!userInput) {
@@ -277,7 +335,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== MUTE COMMAND (Works with ID and Mention) ==========
+    // ========== MUTE COMMAND ==========
     if (command === 'mute') {
         const userInput = args[0];
         if (!userInput) {
@@ -382,7 +440,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== WARN COMMAND (Works with ID and Mention) ==========
+    // ========== WARN COMMAND ==========
     if (command === 'warn') {
         const userInput = args[0];
         if (!userInput) {
@@ -401,38 +459,47 @@ client.on('messageCreate', async (message) => {
         let targetMember = await message.guild.members.fetch(userId).catch(() => null);
         
         if (!targetMember) {
-            return message.reply({ embeds: [createErrorEmbed('Error', 'Could not find that user in the server.')] });
+            // User not in server, but we can still warn them by ID
+            console.log(`User ${userId} not in server, warning will be stored by ID only`);
         }
 
         if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
             return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Moderate Members** permission to warn someone.')] });
         }
 
-        const memberHighestRole = message.member.roles.highest;
-        const targetHighestRole = targetMember.roles.highest;
-        
-        if (targetHighestRole.position >= memberHighestRole.position && message.member.id !== message.guild.ownerId) {
-            return message.reply({ embeds: [createErrorEmbed('Error', `Cannot warn ${targetMember.user.tag} - they have a role higher than or equal to your highest role.`)] });
+        if (targetMember) {
+            const memberHighestRole = message.member.roles.highest;
+            const targetHighestRole = targetMember.roles.highest;
+            
+            if (targetHighestRole.position >= memberHighestRole.position && message.member.id !== message.guild.ownerId) {
+                return message.reply({ embeds: [createErrorEmbed('Error', `Cannot warn ${targetMember.user.tag} - they have a role higher than or equal to your highest role.`)] });
+            }
         }
 
         const reason = getReason(args.slice(1));
-        const warnId = Date.now().toString();
+        const warnId = Math.floor(Date.now() / 1000).toString(); // Unix timestamp as ID
+        const timestamp = new Date().toLocaleString();
 
         if (!warns.has(userId)) {
             warns.set(userId, []);
         }
 
+        const userName = targetMember ? targetMember.user.tag : `Unknown User (ID: ${userId})`;
+        
         warns.get(userId).push({
             id: warnId,
             reason: reason,
             moderator: message.author.tag,
             moderatorId: message.author.id,
-            timestamp: new Date().toLocaleString()
+            timestamp: timestamp,
+            userName: userName
         });
+
+        saveWarnings();
 
         const warnCount = warns.get(userId).length;
         
-        const embed = createSuccessEmbed('User Warned', `**User:** ${targetMember.user.toString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}\n\n**Warning ID:** ${warnId}\n\n**Total Warnings:** ${warnCount}`);
+        const embed = createSuccessEmbed('User Warned', `**User:** ${targetMember ? targetMember.user.toString() : `Unknown User (ID: ${userId})`}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}\n\n**Warning ID:** ${warnId}\n\n**Total Warnings:** ${warnCount}`);
         await message.reply({ embeds: [embed] });
     }
 
@@ -454,17 +521,12 @@ client.on('messageCreate', async (message) => {
             return message.reply({ embeds: [createErrorEmbed('Error', 'You cannot remove your own warnings.')] });
         }
 
-        const targetMember = await message.guild.members.fetch(userId).catch(() => null);
-        if (!targetMember) {
-            return message.reply({ embeds: [createErrorEmbed('Error', 'Could not find that user.')] });
-        }
-
         if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
             return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Moderate Members** permission to remove warnings.')] });
         }
 
         if (!warns.has(userId)) {
-            return message.reply({ embeds: [createErrorEmbed('Error', `${targetMember.user.tag} has no warnings.`)] });
+            return message.reply({ embeds: [createErrorEmbed('Error', `This user has no warnings.`)] });
         }
 
         const userWarns = warns.get(userId);
@@ -477,13 +539,8 @@ client.on('messageCreate', async (message) => {
         const removedWarn = userWarns[warnIndex];
         
         if (removedWarn.moderatorId !== message.author.id) {
-            const originalWarner = await message.guild.members.fetch(removedWarn.moderatorId).catch(() => null);
-            if (originalWarner && message.member.id !== message.guild.ownerId) {
-                const memberHighestRole = message.member.roles.highest;
-                const warnerHighestRole = originalWarner.roles.highest;
-                if (warnerHighestRole.position > memberHighestRole.position) {
-                    return message.reply({ embeds: [createErrorEmbed('Error', `Cannot remove this warning - it was issued by someone with a higher role than you (${removedWarn.moderator}).`)] });
-                }
+            if (message.member.id !== message.guild.ownerId) {
+                return message.reply({ embeds: [createErrorEmbed('Error', `Cannot remove this warning - it was issued by ${removedWarn.moderator}. Only that moderator or an admin can remove it.`)] });
             }
         }
 
@@ -492,53 +549,57 @@ client.on('messageCreate', async (message) => {
             warns.delete(userId);
         }
 
-        const embed = createSuccessEmbed('Warning Removed', `**User:** ${targetMember.user.toString()}\n\n**Removed Warning ID:** ${warnId}\n\n**Original Reason:** ${removedWarn.reason}\n\n**Original Moderator:** ${removedWarn.moderator}\n\n**Removed by:** ${message.author.toString()}\n\n**Remaining Warnings:** ${userWarns.length}`);
+        saveWarnings();
+
+        const embed = createSuccessEmbed('Warning Removed', `**User:** ${removedWarn.userName}\n\n**Removed Warning ID:** ${warnId}\n\n**Original Reason:** ${removedWarn.reason}\n\n**Original Moderator:** ${removedWarn.moderator}\n\n**Removed by:** ${message.author.toString()}\n\n**Remaining Warnings:** ${userWarns.length}`);
         await message.reply({ embeds: [embed] });
     }
 
-    // ========== WARNS COMMAND ==========
+    // ========== WARNS COMMAND (Styled like Carl-bot) ==========
     if (command === 'warns') {
-        let targetMember = message.member;
+        let targetUserId = message.author.id;
+        let targetUserName = message.author.tag;
         let isSelf = true;
         
         if (args[0]) {
             const userId = getUserIdFromInput(args[0]);
             if (userId) {
-                targetMember = await message.guild.members.fetch(userId).catch(() => null);
+                targetUserId = userId;
+                const targetMember = await message.guild.members.fetch(userId).catch(() => null);
+                targetUserName = targetMember ? targetMember.user.tag : `Unknown User (ID: ${userId})`;
             }
             
-            if (!targetMember) {
-                return message.reply({ embeds: [createErrorEmbed('Error', 'Could not find that user.')] });
-            }
-            
-            if (userId !== message.author.id && !message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+            if (targetUserId !== message.author.id && !message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
                 return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Moderate Members** permission to view other users\' warnings.')] });
             }
             isSelf = false;
         }
         
-        const userWarns = warns.get(targetMember.id) || [];
+        const userWarns = warns.get(targetUserId) || [];
         
         if (userWarns.length === 0) {
             const embed = new EmbedBuilder()
-                .setTitle(`Warnings for ${targetMember.user.tag}`)
-                .setDescription(`${isSelf ? 'You have' : 'This user has'} no warnings.`)
+                .setDescription(`**${targetUserName}** has no warnings.`)
                 .setColor(0x00FF00)
                 .setTimestamp();
             return message.reply({ embeds: [embed] });
         }
         
-        let description = `**Total Warnings:** ${userWarns.length}\n\n`;
-        userWarns.forEach((warn, index) => {
-            description += `**Warning #${index + 1} (ID: ${warn.id})**\n`;
-            description += `📝 Reason: ${warn.reason}\n`;
-            description += `👤 Moderator: ${warn.moderator}\n`;
-            description += `⏰ Time: ${warn.timestamp}\n\n`;
+        // Format warnings like Carl-bot
+        let description = `**${userWarns.length} warning${userWarns.length !== 1 ? 's' : ''} found**\n\n`;
+        
+        // Sort warnings by ID (newest first)
+        const sortedWarns = [...userWarns].sort((a, b) => parseInt(b.id) - parseInt(a.id));
+        
+        sortedWarns.forEach((warn) => {
+            const date = new Date(parseInt(warn.id) * 1000).toLocaleDateString();
+            description += `**#${warn.id} | warn | ${date}**\n`;
+            description += `Responsible moderator: ${warn.moderator}\n`;
+            description += `Reason: ${warn.reason}\n\n`;
         });
         
         const embed = new EmbedBuilder()
-            .setTitle(`Warnings for ${targetMember.user.tag}`)
-            .setDescription(description.substring(0, 4096))
+            .setDescription(description)
             .setColor(0xFFA500)
             .setTimestamp();
         
