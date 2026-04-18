@@ -606,12 +606,12 @@ client.on('messageCreate', async (message) => {
             
             let roleText = '';
             for (const role of pageRoles) {
-                roleText += `${role.toString()} - \`${role.members.size}\` members\n`;
+                roleText += `**${role.name}** - \`${role.members.size}\` members\n`;
             }
             
             const embed = new EmbedBuilder()
                 .setTitle('LawsHub Roles')
-                .setDescription(`\`\`\`\n${roleText || 'No roles on this page'}\n\nPage ${page + 1}/${totalPages}\`\`\``)
+                .setDescription(`${roleText || 'No roles on this page'}\n\nPage ${page + 1}/${totalPages}`)
                 .setColor(0x14004B);
             
             return embed;
