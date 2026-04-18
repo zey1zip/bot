@@ -21,6 +21,14 @@ const forcedNicknames = new Map();
 const WARNINGS_FILE = './warnings.json';
 let warns = new Map();
 
+// Auto-warn action configuration
+const warnActions = {
+    3: { action: 'mute', duration: '1h', deleteWarns: true },
+    5: { action: 'mute', duration: '1d', deleteWarns: true },
+    6: { action: 'demote', deleteWarns: true },
+    7: { action: 'ban', deleteWarns: true }
+};
+
 // Load warnings from file
 function loadWarnings() {
     if (fs.existsSync(WARNINGS_FILE)) {
@@ -41,6 +49,101 @@ function saveWarnings() {
 }
 
 loadWarnings();
+
+// Function to process warn actions
+async function processWarnActions(userId, guild, moderatorId) {
+    const userWarns = warns.get(userId);
+    if (!userWarns) return false;
+    
+    const warnCount = userWarns.length;
+    const actionConfig = warnActions[warnCount];
+    
+    if (!actionConfig) return false;
+    
+    const targetMember = await guild.members.fetch(userId).catch(() => null);
+    if (!targetMember) return false;
+    
+    const moderator = await guild.members.fetch(moderatorId).catch(() => null);
+    const moderatorName = moderator ? moderator.user.tag : 'Auto System';
+    
+    let actionPerformed = false;
+    let actionDescription = '';
+    
+    try {
+        switch (actionConfig.action) {
+            case 'mute':
+                let milliseconds = 0;
+                const durationStr = actionConfig.duration;
+                const durationValue = parseInt(durationStr);
+                const durationUnit = durationStr.slice(-1);
+                
+                switch(durationUnit) {
+                    case 'm': milliseconds = durationValue * 60 * 1000; break;
+                    case 'h': milliseconds = durationValue * 60 * 60 * 1000; break;
+                    case 'd': milliseconds = durationValue * 24 * 60 * 60 * 1000; break;
+                    default: milliseconds = 60 * 60 * 1000;
+                }
+                
+                await targetMember.timeout(milliseconds, `Auto-action: ${warnCount} warnings`);
+                actionDescription = `muted for ${durationStr}`;
+                actionPerformed = true;
+                break;
+                
+            case 'demote':
+                const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
+                if (userRoles.size > 0) {
+                    const highestRole = userRoles.sort((a, b) => b.position - a.position).first();
+                    await targetMember.roles.remove(highestRole, `Auto-action: ${warnCount} warnings`);
+                    actionDescription = `demoted (removed ${highestRole.name})`;
+                    actionPerformed = true;
+                } else {
+                    actionDescription = `could not demote (no roles to remove)`;
+                }
+                break;
+                
+            case 'ban':
+                await targetMember.ban({ reason: `Auto-action: ${warnCount} warnings` });
+                actionDescription = `banned`;
+                actionPerformed = true;
+                break;
+        }
+        
+        if (actionConfig.deleteWarns && actionPerformed) {
+            warns.delete(userId);
+            saveWarnings();
+            
+            const embed = new EmbedBuilder()
+                .setTitle('⚠️ Auto-Action Triggered')
+                .setDescription(`**User:** ${targetMember.user.toString()}\n**User ID:** ${userId}\n**Warning Count:** ${warnCount}\n**Action:** ${actionDescription}\n**Moderator:** ${moderatorName}`)
+                .setColor(0xFFA500)
+                .setTimestamp();
+            
+            const logChannelId = process.env.MOD_LOG_CHANNEL_ID;
+            if (logChannelId) {
+                const logChannel = await guild.channels.fetch(logChannelId).catch(() => null);
+                if (logChannel) {
+                    await logChannel.send({ embeds: [embed] });
+                }
+            }
+            
+            try {
+                const dmEmbed = new EmbedBuilder()
+                    .setTitle(`Action Taken in ${guild.name}`)
+                    .setDescription(`You have been ${actionDescription} due to reaching **${warnCount} warnings**.\n\nIf you believe this was a mistake, please contact a moderator.`)
+                    .setColor(0xFF0000)
+                    .setTimestamp();
+                await targetMember.user.send({ embeds: [dmEmbed] });
+            } catch (dmError) {
+                console.log(`Could not DM ${targetMember.user.tag}`);
+            }
+        }
+        
+        return actionPerformed;
+    } catch (error) {
+        console.error(`Auto-action failed for ${userId}:`, error);
+        return false;
+    }
+}
 
 const startTime = Date.now();
 
@@ -68,7 +171,6 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
     }
 });
 
-// Helper functions with custom emojis
 function createSuccessEmbed(title, description) {
     const embed = new EmbedBuilder()
         .setTitle(title)
@@ -506,7 +608,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== MUTE COMMAND (Updated - Supports seconds, minutes, hours, days, weeks) ==========
+    // ========== MUTE COMMAND ==========
     if (command === 'mute') {
         const userInput = args[0];
         if (!userInput) {
@@ -544,7 +646,6 @@ client.on('messageCreate', async (message) => {
             return message.reply({ embeds: [createErrorEmbed('Error', `Cannot mute ${targetMember.user.tag} - they have a role higher than or equal to your highest role.`)] });
         }
 
-        // Parse duration (supports: s, m, h, d, w)
         let duration = args[1];
         let reasonStart = 2;
         let milliseconds = 0;
@@ -566,7 +667,6 @@ client.on('messageCreate', async (message) => {
             default: milliseconds = 10 * 60 * 1000;
         }
         
-        // Max 28 days (Discord limit)
         const maxMs = 28 * 24 * 60 * 60 * 1000;
         if (milliseconds > maxMs) {
             return message.reply({ embeds: [createErrorEmbed('Error', 'Maximum mute duration is 28 days. Please use a shorter duration.')] });
@@ -574,7 +674,6 @@ client.on('messageCreate', async (message) => {
         
         const reason = getReason(args.slice(reasonStart));
 
-        // Format duration text for display
         let durationText = '';
         if (durationUnit === 's') durationText = `${durationValue} second(s)`;
         else if (durationUnit === 'm') durationText = `${durationValue} minute(s)`;
@@ -628,7 +727,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== WARN COMMAND ==========
+    // ========== WARN COMMAND (with auto-actions) ==========
     if (command === 'warn') {
         const userInput = args[0];
         if (!userInput) {
@@ -682,7 +781,14 @@ client.on('messageCreate', async (message) => {
 
         const warnCount = warns.get(userId).length;
         
-        const embed = createSuccessEmbed('User Warned', `**User:** ${targetMember ? targetMember.user.toString() : `Unknown User (ID: ${userId})`}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}\n\n**Warning ID:** ${warnId}\n\n**Total Warnings:** ${warnCount}`);
+        const actionTaken = await processWarnActions(userId, message.guild, message.author.id);
+        
+        let actionMessage = '';
+        if (actionTaken) {
+            actionMessage = `\n\n⚠️ **Auto-action triggered at ${warnCount} warnings!**`;
+        }
+        
+        const embed = createSuccessEmbed('User Warned', `**User:** ${targetMember ? targetMember.user.toString() : `Unknown User (ID: ${userId})`}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}\n\n**Warning ID:** ${warnId}\n\n**Total Warnings:** ${warnCount}${actionMessage}`);
         await message.reply({ embeds: [embed] });
     }
 
