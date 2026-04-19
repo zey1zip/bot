@@ -341,6 +341,52 @@ client.on('messageCreate', async (message) => {
             console.error(error);
             await message.reply(`<:unknown:1495103708957118684> Failed to send message.`);
         }
+        if (command === 'adminlist') {
+        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+            return message.reply(`<:unknown:1495103708957118684> You need **Administrator** permission to view the admin list.`);
+        }
+
+        try {
+            const adminMembers = [];
+            
+            // Fetch all members (in case cache is incomplete)
+            await message.guild.members.fetch();
+            
+            // Find all members with Administrator permission
+            for (const [id, member] of message.guild.members.cache) {
+                if (member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    adminMembers.push(member);
+                }
+            }
+            
+            if (adminMembers.length === 0) {
+                return message.reply({ embeds: [createErrorEmbed('No Admins', 'No members with Administrator permission found.')] });
+            }
+            
+            // Sort by role hierarchy (highest first)
+            adminMembers.sort((a, b) => b.roles.highest.position - a.roles.highest.position);
+            
+            let description = `**Total Administrators:** ${adminMembers.length}\n\n`;
+            
+            adminMembers.forEach((member, index) => {
+                const highestRole = member.roles.highest.name !== '@everyone' ? member.roles.highest.name : 'No role';
+                description += `**${index + 1}.** ${member.user.toString()}\n`;
+                description += `└ ID: \`${member.id}\` | Role: ${highestRole}\n\n`;
+            });
+            
+            const embed = new EmbedBuilder()
+                .setTitle('👑 Server Administrators')
+                .setDescription(description)
+                .setColor(0xFF0000)
+                .setTimestamp();
+            
+            await message.reply({ embeds: [embed] });
+            
+        } catch (error) {
+            console.error(error);
+            await message.reply(`<:unknown:1495103708957118684> Failed to fetch admin list.`);
+        }
+    }
     }
 
     // ========== STATS COMMAND ==========
