@@ -437,11 +437,21 @@ client.on('messageCreate', async (message) => {
             return message.reply('I need **Manage Roles** permission to promote someone.');
         }
 
-        const roleName = args.slice(1).join(' ');
+        // Extract reason (everything after the role name)
+        let reason = 'No reason provided';
+        let roleName = args.slice(1).join(' ');
+        
+        // Check for reason with dash format: "RoleName - reason here"
+        if (roleName.includes(' - ')) {
+            const parts = roleName.split(' - ');
+            roleName = parts[0];
+            reason = parts.slice(1).join(' - ');
+        }
+        
         let targetRole = null;
         let oldRole = null;
         let oldRoleName = 'None';
-        let reason = 'No reason provided';
+        let oldRoleMention = 'None';
         
         if (roleName) {
             targetRole = message.guild.roles.cache.find(role => 
@@ -460,6 +470,7 @@ client.on('messageCreate', async (message) => {
             if (userRoles.size > 0) {
                 oldRole = userRoles.sort((a, b) => b.position - a.position).first();
                 oldRoleName = oldRole.name;
+                oldRoleMention = `<@&${oldRole.id}>`;
             }
             
             const highestBotRole = botMember.roles.highest;
@@ -474,13 +485,13 @@ client.on('messageCreate', async (message) => {
             
             try {
                 if (oldRole) {
-                    await targetMember.roles.remove(oldRole, `Promoted by ${message.author.tag}`);
+                    await targetMember.roles.remove(oldRole, `Promoted by ${message.author.tag}: ${reason}`);
                 }
-                await targetMember.roles.add(targetRole, `Promoted by ${message.author.tag}`);
+                await targetMember.roles.add(targetRole, `Promoted by ${message.author.tag}: ${reason}`);
                 
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Promotion')
-                    .setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n\n**Current role:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}`)
+                    .setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleMention}\n\n**Current role:** ${targetRole.toString()}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}`)
                     .setColor(0x00FF00);
                 
                 await message.reply({ embeds: [embed] });
@@ -497,6 +508,7 @@ client.on('messageCreate', async (message) => {
 
             const highestUserRole = userRoles.sort((a, b) => b.position - a.position).first();
             oldRoleName = highestUserRole.name;
+            oldRoleMention = `<@&${highestUserRole.id}>`;
             
             const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
             const sortedRoles = allRoles.sort((a, b) => b.position - a.position);
@@ -529,12 +541,12 @@ client.on('messageCreate', async (message) => {
             }
 
             try {
-                await targetMember.roles.remove(highestUserRole, `Promoted by ${message.author.tag}`);
-                await targetMember.roles.add(nextRole, `Promoted by ${message.author.tag}`);
+                await targetMember.roles.remove(highestUserRole, `Promoted by ${message.author.tag}: ${reason}`);
+                await targetMember.roles.add(nextRole, `Promoted by ${message.author.tag}: ${reason}`);
                 
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Promotion')
-                    .setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n\n**Current role:** ${nextRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}`)
+                    .setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleMention}\n\n**Current role:** ${nextRole.toString()}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}`)
                     .setColor(0x00FF00);
                 
                 await message.reply({ embeds: [embed] });
@@ -545,7 +557,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== DEMOTE COMMAND ==========
+        // ========== DEMOTE COMMAND ==========
     if (command === 'demote') {
         const targetMention = args[0];
         if (!targetMention) {
@@ -568,7 +580,16 @@ client.on('messageCreate', async (message) => {
             return message.reply('I need **Manage Roles** permission to demote someone.');
         }
 
-        const roleName = args.slice(1).join(' ');
+        // Extract reason (everything after the role name)
+        let reason = 'No reason provided';
+        let roleName = args.slice(1).join(' ');
+        
+        // Check for reason with dash format: "RoleName - reason here"
+        if (roleName.includes(' - ')) {
+            const parts = roleName.split(' - ');
+            roleName = parts[0];
+            reason = parts.slice(1).join(' - ');
+        }
         
         if (roleName) {
             const targetRole = message.guild.roles.cache.find(role => 
@@ -589,11 +610,11 @@ client.on('messageCreate', async (message) => {
             }
             
             try {
-                await targetMember.roles.remove(targetRole, `Demoted by ${message.author.tag}`);
+                await targetMember.roles.remove(targetRole, `Demoted by ${message.author.tag}: ${reason}`);
                 
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Demotion')
-                    .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${targetRole.name}\n\n**Current role:** Removed\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}`)
+                    .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${targetRole.toString()}\n\n**Current role:** Removed\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}`)
                     .setColor(0xFF0000);
                 
                 await message.reply({ embeds: [embed] });
@@ -610,6 +631,7 @@ client.on('messageCreate', async (message) => {
 
             const lowestUserRole = userRoles.sort((a, b) => a.position - b.position).first();
             const oldRoleName = lowestUserRole.name;
+            const oldRoleMention = `<@&${lowestUserRole.id}>`;
             
             const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
             const sortedRoles = allRoles.sort((a, b) => a.position - b.position);
@@ -632,12 +654,12 @@ client.on('messageCreate', async (message) => {
             }
 
             try {
-                await targetMember.roles.remove(lowestUserRole, `Demoted by ${message.author.tag}`);
-                await targetMember.roles.add(nextRole, `Demoted by ${message.author.tag}`);
+                await targetMember.roles.remove(lowestUserRole, `Demoted by ${message.author.tag}: ${reason}`);
+                await targetMember.roles.add(nextRole, `Demoted by ${message.author.tag}: ${reason}`);
                 
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Demotion')
-                    .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n\n**Current role:** ${nextRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}`)
+                    .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleMention}\n\n**Current role:** ${nextRole.toString()}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}`)
                     .setColor(0xFF0000);
                 
                 await message.reply({ embeds: [embed] });
