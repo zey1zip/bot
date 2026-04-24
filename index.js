@@ -18,9 +18,9 @@ const jailBackups = new Map(); // For jail/unjail
 const forcedNicknames = new Map();
 const channelPermBackups = new Map(); // Store original channel permissions for lock/unlock
 const afkUsers = new Map(); // AFK System - Store AFK users
-const claimedTickets = new Map(); // For ticket claims
+const claimedTickets = new Map(); // Ticket System - Store claimed tickets
 
-
+// Ticket categories
 const ticketCategories = {
     'script-key': { name: 'Script/Key Support', emoji: '1497257556295422132' }
 };
@@ -54,6 +54,58 @@ function saveWarnings() {
 }
 
 loadWarnings();
+
+// Function to create a ticket channel
+async function createTicketChannel(interaction, ticketType) {
+    const guild = interaction.guild;
+    const user = interaction.user;
+    const categoryId = '1497258380325027960';
+    const supportRoleId = '1495189880760828075';
+    
+    const existingChannel = guild.channels.cache.find(
+        channel => channel.name === `ticket-${user.id}` && channel.parentId === categoryId
+    );
+    
+    if (existingChannel) {
+        return interaction.reply({ 
+            content: '❌ You already have an open ticket! Please close it first.', 
+            ephemeral: true 
+        });
+    }
+    
+    try {
+        const channel = await guild.channels.create({
+            name: `ticket-${user.id}`,
+            type: 0,
+            parent: categoryId,
+            permissionOverwrites: [
+                { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+                { id: supportRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+                { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] }
+            ]
+        });
+        
+        const ticketEmbed = new EmbedBuilder()
+            .setTitle('LawsHub Ticket Support')
+            .setDescription(`<a:unknown:1495084306781962432> **Explain your problem in full detail, please wait for a LawsHub support team to review and answer.**\n\n**Ticket Type:** ${ticketCategories[ticketType]?.name || ticketType}\n**Created by:** ${user.toString()}\n**Claimed by:** Not yet claimed`)
+            .setColor(0x2B017F);
+        
+        await channel.send({ 
+            content: `${user.toString()} <@&${supportRoleId}>`,
+            embeds: [ticketEmbed] 
+        });
+        
+        await interaction.reply({ 
+            content: `<a:unknown:1495084306781962432> Ticket created! Please continue in ${channel.toString()}`, 
+            ephemeral: true 
+        });
+        
+    } catch (error) {
+        console.error(error);
+        await interaction.reply({ content: '❌ Failed to create ticket channel.', ephemeral: true });
+    }
+}
 
 // Function to process warn actions
 async function processWarnActions(userId, guild, moderatorId) {
@@ -213,11 +265,9 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
     // ========== AFK SYSTEM - PING HANDLING (runs for EVERY message) ==========
-    // Handle message pings and replies - store messages for AFK users
     if (message.mentions.users.size > 0 || message.reference) {
         for (const [userId, afkData] of afkUsers) {
             if (message.mentions.users.has(userId)) {
-                // Store the message
                 afkData.storedMessages.push({
                     author: message.author.tag,
                     authorId: message.author.id,
@@ -227,12 +277,10 @@ client.on('messageCreate', async (message) => {
                     timestamp: Date.now()
                 });
 
-                // Keep only last 10 messages
                 if (afkData.storedMessages.length > 10) {
                     afkData.storedMessages.shift();
                 }
 
-                // Send AFK notification to the pinger
                 const duration = Date.now() - afkData.timestamp;
                 const minutes = Math.floor(duration / 60000);
                 const seconds = Math.floor((duration % 60000) / 1000);
@@ -258,7 +306,6 @@ client.on('messageCreate', async (message) => {
 
         afkUsers.delete(message.author.id);
 
-        // Remove [AFK] from nickname
         try {
             const currentNick = message.member?.nickname;
             if (currentNick && currentNick.startsWith('[AFK]')) {
@@ -309,7 +356,6 @@ client.on('messageCreate', async (message) => {
             storedMessages: []
         });
 
-        // Try to set nickname with [AFK] prefix
         try {
             const currentNick = message.member.nickname || message.author.username;
             if (!currentNick.startsWith('[AFK]')) {
@@ -325,6 +371,195 @@ client.on('messageCreate', async (message) => {
             .setTimestamp();
 
         await message.reply({ embeds: [afkEmbed] });
+    }
+
+    // ========== TICKET PANEL COMMAND ==========
+    if (command === 'ticketpanel') {
+        const targetChannel = message.mentions.channels.first() || message.channel;
+        
+        const panelEmbed = new EmbedBuilder()
+            .setTitle('LawsHub Support')
+            .setDescription('**Please select a button below to open a ticket.**')
+            .setColor(0x2B017F);
+        
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId('ticket_script-key')
+                    .setLabel('Script/Key')
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('1497257556295422132')
+            );
+        
+        await targetChannel.send({ embeds: [panelEmbed], components: [row] });
+        await message.reply(`✅ Ticket panel sent to ${targetChannel.toString()}`);
+    }
+
+    // ========== TICKET COMMANDS ==========
+    if (command === 'ticket') {
+        const subCommand = args[0]?.toLowerCase();
+        
+        if (!message.channel.name.startsWith('ticket-')) {
+            return message.reply('❌ This command can only be used in a ticket channel.');
+        }
+        
+        const userId = message.channel.name.replace('ticket-', '');
+        const ticketOwner = await message.guild.members.fetch(userId).catch(() => null);
+        const supportRoleId = '1495189880760828075';
+        
+        // CLAIM
+        if (subCommand === 'claim') {
+            if (!message.member.roles.cache.has(supportRoleId)) {
+                return message.reply('❌ You need the Support role to claim tickets.');
+            }
+            
+            if (claimedTickets.has(message.channel.id)) {
+                const claimer = await message.guild.members.fetch(claimedTickets.get(message.channel.id)).catch(() => null);
+                return message.reply(`❌ This ticket is already claimed by ${claimer?.user.toString() || 'someone'}.`);
+            }
+            
+            await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { ViewChannel: false });
+            await message.channel.permissionOverwrites.edit(supportRoleId, { ViewChannel: false });
+            await message.channel.permissionOverwrites.edit(message.author.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
+            
+            if (ticketOwner) {
+                await message.channel.permissionOverwrites.edit(ticketOwner.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
+            }
+            
+            claimedTickets.set(message.channel.id, message.author.id);
+            
+            const embed = new EmbedBuilder()
+                .setTitle('Ticket Claimed')
+                .setDescription(`<a:unknown:1495084306781962432> **Ticket claimed by ${message.author.toString()}**\n\nThis ticket is now private.`)
+                .setColor(0x00FF00);
+            
+            await message.reply({ embeds: [embed] });
+        }
+        
+        // TRANSFER
+        else if (subCommand === 'transfer') {
+            const targetInput = args[1];
+            if (!targetInput) {
+                return message.reply('❌ Please mention a user to transfer this ticket to. Example: `.ticket transfer @user`');
+            }
+            
+            if (!message.member.roles.cache.has(supportRoleId)) {
+                return message.reply('❌ You need the Support role to transfer tickets.');
+            }
+            
+            const targetUserId = getUserIdFromInput(targetInput);
+            if (!targetUserId) {
+                return message.reply('❌ Invalid user.');
+            }
+            
+            const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
+            if (!targetMember) {
+                return message.reply('❌ Could not find that user.');
+            }
+            
+            const currentClaimerId = claimedTickets.get(message.channel.id);
+            
+            if (currentClaimerId) {
+                await message.channel.permissionOverwrites.delete(currentClaimerId);
+            }
+            
+            await message.channel.permissionOverwrites.edit(targetMember.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
+            
+            claimedTickets.set(message.channel.id, targetMember.id);
+            
+            const embed = new EmbedBuilder()
+                .setTitle('Ticket Transferred')
+                .setDescription(`<a:unknown:1495084306781962432> **Ticket transferred to ${targetMember.toString()}**\n\nTransferred by: ${message.author.toString()}`)
+                .setColor(0xFFA500);
+            
+            await message.reply({ embeds: [embed] });
+        }
+        
+        // CLOSE
+        else if (subCommand === 'close') {
+            const reason = args.slice(1).join(' ') || 'No reason provided';
+            
+            const ticketOwnerId = message.channel.name.replace('ticket-', '');
+            const ticketOwnerMember = await message.guild.members.fetch(ticketOwnerId).catch(() => null);
+            const claimedById = claimedTickets.get(message.channel.id);
+            const claimedByMember = claimedById ? await message.guild.members.fetch(claimedById).catch(() => null) : null;
+            
+            const messages = await message.channel.messages.fetch({ limit: 100 });
+            const transcript = messages.reverse().map(m => `[${m.createdAt.toLocaleString()}] ${m.author.tag}: ${m.content}`).join('\n');
+            
+            const logChannelId = '1497258421953499146';
+            const logChannel = await message.guild.channels.fetch(logChannelId).catch(() => null);
+            
+            if (logChannel) {
+                const closedAt = Math.floor(Date.now() / 1000);
+                
+                const logEmbed = new EmbedBuilder()
+                    .setTitle('Ticket Closed')
+                    .setDescription(`Closed by ${message.author.toString()}`)
+                    .addFields(
+                        { name: 'Closed by', value: message.author.tag, inline: true },
+                        { name: 'Reason', value: reason, inline: true },
+                        { name: 'User', value: ticketOwnerMember ? ticketOwnerMember.user.tag : ticketOwnerId, inline: true },
+                        { name: 'Claimed by', value: claimedByMember ? claimedByMember.user.tag : 'Not claimed', inline: true },
+                        { name: 'Channel', value: message.channel.name, inline: true },
+                        { name: 'Time', value: `<t:${closedAt}:R>`, inline: true }
+                    )
+                    .setColor(0xFF0000)
+                    .setTimestamp();
+                
+                await logChannel.send({ embeds: [logEmbed] });
+                
+                if (transcript.length > 0) {
+                    const transcriptBuffer = Buffer.from(transcript, 'utf-8');
+                    await logChannel.send({ 
+                        content: `📝 **Transcript for ${message.channel.name}**`,
+                        files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }] 
+                    }).catch(() => {});
+                }
+            }
+            
+            if (ticketOwnerMember) {
+                try {
+                    const transcriptBuffer = Buffer.from(transcript, 'utf-8');
+                    
+                    const dmEmbed = new EmbedBuilder()
+                        .setTitle('🎫 Ticket Closed')
+                        .setDescription(`Your ticket in **${message.guild.name}** has been closed.`)
+                        .addFields(
+                            { name: 'Closed by', value: message.author.tag, inline: true },
+                            { name: 'Reason', value: reason, inline: true },
+                            { name: 'Channel', value: message.channel.name, inline: true }
+                        )
+                        .setColor(0xFF0000)
+                        .setTimestamp();
+                    
+                    await ticketOwnerMember.send({ 
+                        embeds: [dmEmbed],
+                        files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }]
+                    });
+                } catch (err) {
+                    console.log('Could not DM ticket owner');
+                }
+            }
+            
+            const embed = new EmbedBuilder()
+                .setTitle('Ticket Closed')
+                .setDescription(`<a:unknown:1495084306781962432> Ticket closed by ${message.author.toString()}\n**Reason:** ${reason}\n\nThis channel will be deleted in 5 seconds.`)
+                .setColor(0xFF0000);
+            
+            await message.reply({ embeds: [embed] });
+            
+            setTimeout(async () => {
+                try {
+                    await message.channel.delete(`Closed by ${message.author.tag}: ${reason}`);
+                } catch (err) {
+                    console.log('Could not delete channel');
+                }
+            }, 5000);
+        }
+        else {
+            return message.reply('Available ticket commands: `.ticket claim`, `.ticket transfer @user`, `.ticket close <reason>`');
+        }
     }
 
     // ========== SAY COMMAND (Owner Only) ==========
@@ -358,10 +593,8 @@ client.on('messageCreate', async (message) => {
         try {
             const adminMembers = [];
 
-            // Fetch all members (in case cache is incomplete)
             await message.guild.members.fetch();
 
-            // Find all members with Administrator permission
             for (const [id, member] of message.guild.members.cache) {
                 if (member.permissions.has(PermissionFlagsBits.Administrator)) {
                     adminMembers.push(member);
@@ -372,7 +605,6 @@ client.on('messageCreate', async (message) => {
                 return message.reply({ embeds: [createErrorEmbed('No Admins', 'No members with Administrator permission found.')] });
             }
 
-            // Sort by role hierarchy (highest first)
             adminMembers.sort((a, b) => b.roles.highest.position - a.roles.highest.position);
 
             let description = `**Total Administrators:** ${adminMembers.length}\n\n`;
@@ -420,7 +652,7 @@ client.on('messageCreate', async (message) => {
         await message.reply({ embeds: [embed] });
     }
 
-    // ========== PROMOTE COMMAND (UPDATED) ==========
+    // ========== PROMOTE COMMAND ==========
     if (command === 'promote') {
         const targetMention = args[0];
         if (!targetMention) {
@@ -443,32 +675,24 @@ client.on('messageCreate', async (message) => {
             return message.reply('I need **Manage Roles** permission to promote someone.');
         }
 
-        // PROTECTED ROLE - WILL NEVER BE REMOVED
         const PROTECTED_ROLE_ID = '1495209173086896158';
 
-        // Get user's roles (excluding @everyone)
         let userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
-        
         let currentRole = null;
-        
-        // Find the lowest role that is NOT the protected role
         const nonProtectedRoles = userRoles.filter(role => role.id !== PROTECTED_ROLE_ID);
-        
+
         if (nonProtectedRoles.size > 0) {
-            // User has other roles - use the lowest one
             currentRole = nonProtectedRoles.sort((a, b) => a.position - b.position).first();
         } else {
-            // User only has protected role or no roles - use the protected role as base
             currentRole = message.guild.roles.cache.get(PROTECTED_ROLE_ID);
             if (!currentRole) {
                 return message.reply('Could not find the protected role.');
             }
         }
 
-        // Find the role BELOW the current role
         const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
         const sortedRoles = allRoles.sort((a, b) => a.position - b.position);
-        
+
         let roleToGive = null;
         let foundCurrent = false;
         for (const role of sortedRoles.values()) {
@@ -482,10 +706,7 @@ client.on('messageCreate', async (message) => {
         if (!roleToGive) return message.reply(`${targetMember.user.tag} already has the lowest role!`);
 
         try {
-            // Add the new role
             await targetMember.roles.add(roleToGive);
-            
-            // ONLY remove the old role if it's NOT the protected role
             if (currentRole.id !== PROTECTED_ROLE_ID) {
                 await targetMember.roles.remove(currentRole);
             }
@@ -506,7 +727,7 @@ client.on('messageCreate', async (message) => {
     if (command === 'demote') {
         const targetMention = args[0];
         if (!targetMention) {
-            return message.reply('Please mention a user to demote. Example: `.demote @user` or `.demote @user RoleName` or `.demote @user RoleName reason here`');
+            return message.reply('Please mention a user to demote. Example: `.demote @user`');
         }
 
         const userId = targetMention.replace(/[<@!>]/g, '');
@@ -525,130 +746,41 @@ client.on('messageCreate', async (message) => {
             return message.reply('I need **Manage Roles** permission to demote someone.');
         }
 
-        // Extract reason (everything after the role name)
-        let reason = 'No reason provided';
-        let roleName = args.slice(1).join(' ');
+        const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
+        if (userRoles.size === 0) {
+            return message.reply(`${targetMember.user.tag} has no roles to demote from.`);
+        }
 
-        // Check if there's a reason (looking for common patterns)
-        const reasonKeywords = ['reason', 'because', 'for:', '-reason', '--reason'];
-        let reasonIndex = -1;
-
-        for (const keyword of reasonKeywords) {
-            const index = roleName.toLowerCase().indexOf(keyword);
-            if (index !== -1) {
-                reasonIndex = index;
+        const lowestUserRole = userRoles.sort((a, b) => a.position - b.position).first();
+        
+        const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
+        const sortedRoles = allRoles.sort((a, b) => a.position - b.position);
+        
+        let roleToGive = null;
+        let foundCurrent = false;
+        for (const role of sortedRoles.values()) {
+            if (foundCurrent) {
+                roleToGive = role;
                 break;
             }
+            if (role.id === lowestUserRole.id) foundCurrent = true;
         }
 
-        if (reasonIndex !== -1) {
-            // Extract reason from the rest of the text
-            reason = roleName.substring(reasonIndex).replace(/reason|because|for:|-reason|--reason/gi, '').trim();
-            roleName = roleName.substring(0, reasonIndex).trim();
-        } else if (roleName.includes(' - ')) {
-            // Alternative format: "RoleName - reason here"
-            const parts = roleName.split(' - ');
-            roleName = parts[0];
-            reason = parts.slice(1).join(' - ');
-        }
+        if (!roleToGive) return message.reply(`${targetMember.user.tag} already has the lowest role!`);
 
-        let targetRole = null;
-        let oldRole = null;
-        let oldRoleName = 'None';
+        try {
+            await targetMember.roles.add(roleToGive);
+            await targetMember.roles.remove(lowestUserRole);
 
-        if (roleName) {
-            // Try to find the role by name
-            targetRole = message.guild.roles.cache.find(role => 
-                role.name.toLowerCase() === roleName.toLowerCase()
-            );
+            const embed = new EmbedBuilder()
+                .setTitle('LawsHub Demotion')
+                .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${lowestUserRole.name}\n\n**Current role:** ${roleToGive.name}\n\n**Time:** ${new Date().toLocaleString()}\n\n**Moderator:** ${message.author.toString()}`)
+                .setColor(0xFF0000);
 
-            if (!targetRole) {
-                return message.reply(`Could not find a role named "${roleName}".`);
-            }
-
-            // Check if user has this role
-            if (!targetMember.roles.cache.has(targetRole.id)) {
-                return message.reply(`${targetMember.user.tag} does not have the ${targetRole.name} role.`);
-            }
-
-            // Get the role we're replacing (will be removed)
-            oldRole = targetRole;
-            oldRoleName = oldRole.name;
-
-            // Check bot role hierarchy
-            const highestBotRole = botMember.roles.highest;
-            if (targetRole.position >= highestBotRole.position) {
-                return message.reply(`Cannot demote ${targetMember.user.tag} from ${targetRole.name} - that role is higher than or equal to my highest role.`);
-            }
-
-            try {
-                await targetMember.roles.remove(targetRole, `Demoted by ${message.author.tag}: ${reason}`);
-
-                // Create embed
-                const embed = new EmbedBuilder()
-                    .setTitle('LawsHub Demotion')
-                    .setDescription(`\`\`\`\n**Demoted ${targetMember.user.tag} from ${oldRoleName}**\n**Previous role:** ${oldRoleName}\n**Current role:** Removed\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.tag}\n**Reason:** ${reason}\n\`\`\``)
-                    .setColor(0xFF0000); // Red for demotion
-
-                await message.reply({ embeds: [embed] });
-            } catch (error) {
-                console.error(error);
-                await message.reply('Failed to demote user.');
-            }
-        } else {
-            // No role specified - demote to next lower role
-            const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
-
-            if (userRoles.size === 0) {
-                return message.reply(`${targetMember.user.tag} has no roles to demote from.`);
-            }
-
-            // Find the lowest role the user has
-            const lowestUserRole = userRoles.sort((a, b) => a.position - b.position).first();
-            oldRoleName = lowestUserRole.name;
-
-            // Find the next lower role in the server
-            const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
-            const sortedRoles = allRoles.sort((a, b) => a.position - b.position);
-
-            let nextRole = null;
-            let foundCurrent = false;
-
-            for (const role of sortedRoles.values()) {
-                if (foundCurrent) {
-                    nextRole = role;
-                    break;
-                }
-                if (role.id === lowestUserRole.id) {
-                    foundCurrent = true;
-                }
-            }
-
-            if (!nextRole) {
-                return message.reply(`${targetMember.user.tag} already has the lowest role in the server!`);
-            }
-
-            // Check bot role hierarchy
-            const highestBotRole = botMember.roles.highest;
-            if (nextRole.position >= highestBotRole.position) {
-                console.log(`Warning: Next role ${nextRole.name} is high in hierarchy`);
-            }
-
-            try {
-                await targetMember.roles.remove(lowestUserRole, `Demoted by ${message.author.tag}: ${reason}`);
-                await targetMember.roles.add(nextRole, `Demoted by ${message.author.tag}: ${reason}`);
-
-                // Create embed
-                const embed = new EmbedBuilder()
-                    .setTitle('LawsHub Demotion')
-                    .setDescription(`\`\`\`\n**Demoted ${targetMember.user.tag} to ${nextRole.name}**\n**Previous role:** ${oldRoleName}\n**Current role:** ${nextRole.name}\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.tag}\n**Reason:** ${reason}\n\`\`\``)
-                    .setColor(0xFF0000); // Red for demotion
-
-                await message.reply({ embeds: [embed] });
-            } catch (error) {
-                console.error(error);
-                await message.reply('Failed to demote user.');
-            }
+            await message.reply({ embeds: [embed] });
+        } catch (error) {
+            console.error(error);
+            await message.reply('Failed to demote user.');
         }
     }
 
@@ -741,9 +873,7 @@ client.on('messageCreate', async (message) => {
             if (targetMember) {
                 try {
                     await targetMember.setNickname(null, `Forced nickname removed by ${message.author.tag}`);
-                } catch (nickError) {
-                    // Ignore
-                }
+                } catch (nickError) {}
             }
 
             await message.reply(`<a:unknown:1495084306781962432> Removed forced nickname from ${targetMember ? targetMember.user.toString() : `user ${userId}`} (was **${forcedData.nickname}**)`);
@@ -890,6 +1020,7 @@ client.on('messageCreate', async (message) => {
             await message.reply('Failed to restore roles.');
         }
     }
+
     // ========== JAIL COMMAND ==========
     if (command === 'jail') {
         const targetMention = args[0];
@@ -1014,6 +1145,7 @@ client.on('messageCreate', async (message) => {
             await message.reply('Failed to unjail user.');
         }
     }
+
     // ========== LOCK COMMAND ==========
     if (command === 'lock') {
         if (!message.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
@@ -1641,261 +1773,16 @@ client.on('messageCreate', async (message) => {
 
         await message.reply({ embeds: [embed] });
     }
+});
 
-// Function to create a ticket channel
-async function createTicketChannel(interaction, ticketType) {
-    const guild = interaction.guild;
-    const user = interaction.user;
-    const categoryId = '1497258380325027960';
-    const supportRoleId = '1495189880760828075';
-    
-    // Check if user already has an open ticket
-    const existingChannel = guild.channels.cache.find(
-        channel => channel.name === `ticket-${user.id}` && channel.parentId === categoryId
-    );
-    
-    if (existingChannel) {
-        return interaction.reply({ 
-            content: '❌ You already have an open ticket! Please close it first.', 
-            ephemeral: true 
-        });
-    }
-    
-    try {
-        const channel = await guild.channels.create({
-            name: `ticket-${user.id}`,
-            type: 0,
-            parent: categoryId,
-            permissionOverwrites: [
-                { id: guild.id, deny: [PermissionFlagsBits.ViewChannel] },
-                { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-                { id: supportRoleId, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-                { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] }
-            ]
-        });
-        
-        const ticketEmbed = new EmbedBuilder()
-            .setTitle('LawsHub Ticket Support')
-            .setDescription(`<a:unknown:1495084306781962432> **Explain your problem in full detail, please wait for a LawsHub support team to review and answer.**\n\n**Ticket Type:** ${ticketCategories[ticketType]?.name || ticketType}\n**Created by:** ${user.toString()}\n**Claimed by:** Not yet claimed`)
-            .setColor(0x2B017F);
-        
-        await channel.send({ 
-            content: `${user.toString()} <@&${supportRoleId}>`,
-            embeds: [ticketEmbed] 
-        });
-        
-        await interaction.reply({ 
-            content: `<a:unknown:1495084306781962432> Ticket created! Please continue in ${channel.toString()}`, 
-            ephemeral: true 
-        });
-        
-    } catch (error) {
-        console.error(error);
-        await interaction.reply({ content: '❌ Failed to create ticket channel.', ephemeral: true });
-    }
-}
-
-    // ========== TICKET PANEL COMMAND ==========
-    if (command === 'ticketpanel') {
-        const targetChannel = message.mentions.channels.first() || message.channel;
-        
-        const panelEmbed = new EmbedBuilder()
-            .setTitle('LawsHub Support')
-            .setDescription('**Please select a button below to open a ticket.**')
-            .setColor(0x2B017F);
-        
-        const row = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId('ticket_script-key')
-                    .setLabel('Script/Key')
-                    .setStyle(ButtonStyle.Primary)
-                    .setEmoji('1497257556295422132')
-            );
-        
-        await targetChannel.send({ embeds: [panelEmbed], components: [row] });
-        await message.reply(`✅ Ticket panel sent to ${targetChannel.toString()}`);
-    }
-
-    // ========== TICKET COMMANDS ==========
-    if (command === 'ticket') {
-        const subCommand = args[0]?.toLowerCase();
-        
-        // Check if in a ticket channel
-        if (!message.channel.name.startsWith('ticket-')) {
-            return message.reply('❌ This command can only be used in a ticket channel.');
-        }
-        
-        const userId = message.channel.name.replace('ticket-', '');
-        const ticketOwner = await message.guild.members.fetch(userId).catch(() => null);
-        const supportRoleId = '1495189880760828075';
-        
-        // ========== TICKET CLAIM ==========
-        if (subCommand === 'claim') {
-            if (!message.member.roles.cache.has(supportRoleId)) {
-                return message.reply('❌ You need the Support role to claim tickets.');
-            }
-            
-            if (claimedTickets.has(message.channel.id)) {
-                const claimer = await message.guild.members.fetch(claimedTickets.get(message.channel.id)).catch(() => null);
-                return message.reply(`❌ This ticket is already claimed by ${claimer?.user.toString() || 'someone'}.`);
-            }
-            
-            await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { ViewChannel: false });
-            await message.channel.permissionOverwrites.edit(supportRoleId, { ViewChannel: false });
-            await message.channel.permissionOverwrites.edit(message.author.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-            
-            if (ticketOwner) {
-                await message.channel.permissionOverwrites.edit(ticketOwner.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-            }
-            
-            claimedTickets.set(message.channel.id, message.author.id);
-            
-            const embed = new EmbedBuilder()
-                .setTitle('Ticket Claimed')
-                .setDescription(`<a:unknown:1495084306781962432> **Ticket claimed by ${message.author.toString()}**\n\nThis ticket is now private.`)
-                .setColor(0x00FF00);
-            
-            await message.reply({ embeds: [embed] });
-        }
-        
-        // ========== TICKET TRANSFER ==========
-        else if (subCommand === 'transfer') {
-            const targetInput = args[1];
-            if (!targetInput) {
-                return message.reply('❌ Please mention a user to transfer this ticket to. Example: `.ticket transfer @user`');
-            }
-            
-            if (!message.member.roles.cache.has(supportRoleId)) {
-                return message.reply('❌ You need the Support role to transfer tickets.');
-            }
-            
-            const targetUserId = getUserIdFromInput(targetInput);
-            if (!targetUserId) {
-                return message.reply('❌ Invalid user.');
-            }
-            
-            const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
-            if (!targetMember) {
-                return message.reply('❌ Could not find that user.');
-            }
-            
-            const currentClaimerId = claimedTickets.get(message.channel.id);
-            
-            if (currentClaimerId) {
-                await message.channel.permissionOverwrites.delete(currentClaimerId);
-            }
-            
-            await message.channel.permissionOverwrites.edit(targetMember.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-            
-            claimedTickets.set(message.channel.id, targetMember.id);
-            
-            const embed = new EmbedBuilder()
-                .setTitle('Ticket Transferred')
-                .setDescription(`<a:unknown:1495084306781962432> **Ticket transferred to ${targetMember.toString()}**\n\nTransferred by: ${message.author.toString()}`)
-                .setColor(0xFFA500);
-            
-            await message.reply({ embeds: [embed] });
-        }
-        
-        // ========== TICKET CLOSE ==========
-        else if (subCommand === 'close') {
-            const reason = args.slice(1).join(' ') || 'No reason provided';
-            
-            const ticketOwnerId = message.channel.name.replace('ticket-', '');
-            const ticketOwnerMember = await message.guild.members.fetch(ticketOwnerId).catch(() => null);
-            const claimedById = claimedTickets.get(message.channel.id);
-            const claimedByMember = claimedById ? await message.guild.members.fetch(claimedById).catch(() => null) : null;
-            
-            // Fetch message history for transcript
-            const messages = await message.channel.messages.fetch({ limit: 100 });
-            const transcript = messages.reverse().map(m => `[${m.createdAt.toLocaleString()}] ${m.author.tag}: ${m.content}`).join('\n');
-            
-            // Send log to the log channel
-            const logChannelId = '1497258421953499146';
-            const logChannel = await message.guild.channels.fetch(logChannelId).catch(() => null);
-            
-            if (logChannel) {
-                const closedAt = Math.floor(Date.now() / 1000);
-                
-                const logEmbed = new EmbedBuilder()
-                    .setTitle('Ticket Closed')
-                    .setDescription(`Closed by ${message.author.toString()}`)
-                    .addFields(
-                        { name: 'Closed by', value: message.author.tag, inline: true },
-                        { name: 'Reason', value: reason, inline: true },
-                        { name: 'User', value: ticketOwnerMember ? ticketOwnerMember.user.tag : ticketOwnerId, inline: true },
-                        { name: 'Claimed by', value: claimedByMember ? claimedByMember.user.tag : 'Not claimed', inline: true },
-                        { name: 'Channel', value: message.channel.name, inline: true },
-                        { name: 'Time', value: `<t:${closedAt}:R>`, inline: true }
-                    )
-                    .setColor(0xFF0000)
-                    .setTimestamp();
-                
-                await logChannel.send({ embeds: [logEmbed] });
-                
-                if (transcript.length > 0) {
-                    const transcriptBuffer = Buffer.from(transcript, 'utf-8');
-                    await logChannel.send({ 
-                        content: `📝 **Transcript for ${message.channel.name}**`,
-                        files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }] 
-                    }).catch(() => {});
-                }
-            }
-            
-            // Send transcript to ticket owner via DM
-            if (ticketOwnerMember) {
-                try {
-                    const transcriptBuffer = Buffer.from(transcript, 'utf-8');
-                    
-                    const dmEmbed = new EmbedBuilder()
-                        .setTitle('🎫 Ticket Closed')
-                        .setDescription(`Your ticket in **${message.guild.name}** has been closed.`)
-                        .addFields(
-                            { name: 'Closed by', value: message.author.tag, inline: true },
-                            { name: 'Reason', value: reason, inline: true },
-                            { name: 'Channel', value: message.channel.name, inline: true }
-                        )
-                        .setColor(0xFF0000)
-                        .setTimestamp();
-                    
-                    await ticketOwnerMember.send({ 
-                        embeds: [dmEmbed],
-                        files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }]
-                    });
-                } catch (err) {
-                    console.log('Could not DM ticket owner');
-                }
-            }
-            
-            const embed = new EmbedBuilder()
-                .setTitle('Ticket Closed')
-                .setDescription(`<a:unknown:1495084306781962432> Ticket closed by ${message.author.toString()}\n**Reason:** ${reason}\n\nTranscript sent to ${ticketOwnerMember ? 'the user\'s DMs' : 'log channel'}.\nThis channel will be deleted in 5 seconds.`)
-                .setColor(0xFF0000);
-            
-            await message.reply({ embeds: [embed] });
-            
-            setTimeout(async () => {
-                try {
-                    await message.channel.delete(`Closed by ${message.author.tag}: ${reason}`);
-                } catch (err) {
-                    console.log('Could not delete channel');
-                }
-            }, 5000);
-        }
-        else {
-            return message.reply('Available ticket commands: `.ticket claim`, `.ticket transfer @user`, `.ticket close <reason>`');
-        }
-    }
-// Handle button interactions
+// Handle button interactions for tickets
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
     if (!interaction.customId.startsWith('ticket_')) return;
     
     const ticketType = interaction.customId.replace('ticket_', '');
     await createTicketChannel(interaction, ticketType);
-    
     await interaction.deferUpdate().catch(() => {});
-
 });
+
 client.login(process.env.DISCORD_TOKEN);
