@@ -1725,6 +1725,16 @@ client.on('messageCreate', async (message) => {
         await message.reply({ embeds: [embed] });
     }
 
+    // ========== HELP COMMAND ==========
+    if (command === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setTitle('LawsHub | Help')
+            .setDescription(`Prefix : \`.\`\n\n<:2904notifystaff:1497275164818280480>︱AFK\n\`- afk <reason>\`\n\n<:3007link:1497275170631450777>︱Ticket System\n\`- ticket claim\`\n\`- ticket transfer <@user>\`\n\`- ticket close <reason>\`\n\n<:7428whitemember:1497274951521275995>︱Owner \n\`- say\`\n\`- stats\`\n\`- adminlist\`\n\n<:5448staffwhite:1497275091539726418>︱Role Management\n\`- promote\`\n\`- demote\`\n\`- wipe\`\n\`- unwipe\`\n\n<:7240partnerwhite:1497275068265271446>︱Nickname\n\`- fn\`\n\`- rfn\`\n\n<:7964modbadgewhite:1497275047528628314>︱Channel\n\`- lock\`\n\`- unlock\`\n\`- purge\`\n\n<:56832developer:1497274968507941026>︱Punishments\n\`- ban\`\n\`- unban\`\n\`- iunban\`\n\`- kick\`\n\`- mute\`\n\`- unmute\`\n\n<:6304whitesmalldot:1497275082836414675>︱Warning system\n\`- warn\`\n\`- unwarn\`\n\`- warns\`\n\`- cw\``)
+            .setColor(0x2A017F); // 2752767 decimal = 0x2A017F
+
+        await message.reply({ embeds: [helpEmbed] });
+    }
+    
     // ========== WARNS COMMAND ==========
     if (command === 'warns') {
         let targetUserId = message.author.id;
