@@ -34,6 +34,174 @@ const warnActions = {
     5: { action: 'demote', deleteWarns: true },
 };
 
+// ========== GIVEAWAY SYSTEM ==========
+const activeGiveaways = new Map();
+const endedGiveaways = new Map();
+const GIVEAWAYS_FILE = './giveaways.json';
+const ENDED_GIVEAWAYS_FILE = './ended_giveaways.json';
+
+function loadGiveaways() {
+    if (fs.existsSync(GIVEAWAYS_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(GIVEAWAYS_FILE, 'utf8'));
+            for (const [key, value] of Object.entries(data)) {
+                value.participants = new Set(value.participants);
+                activeGiveaways.set(key, value);
+            }
+            console.log(`✅ Loaded ${activeGiveaways.size} saved giveaways`);
+        } catch (e) {
+            console.log('No valid giveaways file found');
+        }
+    }
+    
+    if (fs.existsSync(ENDED_GIVEAWAYS_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(ENDED_GIVEAWAYS_FILE, 'utf8'));
+            for (const [key, value] of Object.entries(data)) {
+                value.participants = new Set(value.participants);
+                endedGiveaways.set(key, value);
+            }
+            console.log(`✅ Loaded ${endedGiveaways.size} ended giveaways`);
+        } catch (e) {
+            console.log('No valid ended giveaways file found');
+        }
+    }
+}
+
+function saveGiveaways() {
+    const activeObj = {};
+    for (const [key, value] of activeGiveaways) {
+        activeObj[key] = {
+            ...value,
+            participants: [...value.participants]
+        };
+    }
+    fs.writeFileSync(GIVEAWAYS_FILE, JSON.stringify(activeObj, null, 2));
+    
+    const endedObj = {};
+    for (const [key, value] of endedGiveaways) {
+        endedObj[key] = {
+            ...value,
+            participants: [...value.participants]
+        };
+    }
+    fs.writeFileSync(ENDED_GIVEAWAYS_FILE, JSON.stringify(endedObj, null, 2));
+}
+
+function parseDuration(input) {
+    const match = input.match(/^(\d+)([dhms])$/);
+    if (!match) return null;
+    const value = parseInt(match[1]);
+    const unit = match[2];
+    switch(unit) {
+        case 'd': return value * 24 * 60 * 60 * 1000;
+        case 'h': return value * 60 * 60 * 1000;
+        case 'm': return value * 60 * 1000;
+        case 's': return value * 1000;
+        default: return null;
+    }
+}
+
+async function updateGiveawayEmbed(giveawayId, channel, messageId, prize, winnerCount, hostId, participants, endTime) {
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    if (!message) return;
+    
+    const timeLeft = Math.floor(endTime / 1000);
+    
+    const embed = new EmbedBuilder()
+        .setTitle('🎁 GIVEAWAY 🎁')
+        .setDescription(`**Prize:** ${prize}\n**Hosted by:** <@${hostId}>\n**Entries:** ${participants.size}\n**Winners:** ${winnerCount}\n\nClick the button below to enter!`)
+        .addFields(
+            { name: '⏰ Time Remaining', value: `<t:${timeLeft}:R>`, inline: true },
+            { name: '📅 Ends At', value: `<t:${timeLeft}:F>`, inline: true }
+        )
+        .setColor(0x2B017F)
+        .setTimestamp();
+    
+    await message.edit({ embeds: [embed] });
+}
+
+async function endGiveaway(giveawayId, channel, messageId, prize, winnerCount, hostId, participants, guildName, endTimestamp, isEarly = false) {
+    const message = await channel.messages.fetch(messageId).catch(() => null);
+    if (!message) return;
+    
+    const validParticipants = [...participants];
+    let winners = [];
+    
+    if (validParticipants.length === 0) {
+        winners = ['No one participated'];
+    } else {
+        const shuffled = [...validParticipants];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        winners = shuffled.slice(0, Math.min(winnerCount, shuffled.length));
+    }
+    
+    const winnerMentions = winners.map(w => w === 'No one participated' ? w : `<@${w}>`).join(', ');
+    
+    const endedEmbed = new EmbedBuilder()
+        .setTitle('🎉 GIVEAWAY ENDED 🎉')
+        .setDescription(`**Prize:** ${prize}\n\n**Winner(s):** ${winnerMentions}\n\n**Total Entries:** ${validParticipants.length}\n**Hosted by:** <@${hostId}>`)
+        .setColor(0xFF0000)
+        .setTimestamp();
+    
+    await message.edit({ embeds: [endedEmbed], components: [] });
+    await channel.send(`🎉 **Giveaway ended!** ${winnerMentions} you won **${prize}**!`);
+    
+    for (const winnerId of winners) {
+        if (winnerId !== 'No one participated') {
+            try {
+                const winner = await client.users.fetch(winnerId);
+                const dmEmbed = new EmbedBuilder()
+                    .setTitle('🎉 You won a giveaway! 🎉')
+                    .setDescription(`You won **${prize}** in **${guildName}**!\n\nContact <@${hostId}> to claim your prize.`)
+                    .setColor(0x00FF00)
+                    .setTimestamp();
+                await winner.send({ embeds: [dmEmbed] });
+            } catch (err) {}
+        }
+    }
+    
+    const giveawayData = activeGiveaways.get(giveawayId);
+    if (giveawayData) {
+        endedGiveaways.set(giveawayId, {
+            ...giveawayData,
+            winners: winners,
+            endedAt: Date.now(),
+            endedEarly: isEarly
+        });
+        activeGiveaways.delete(giveawayId);
+    }
+    saveGiveaways();
+}
+
+loadGiveaways();
+
+// Check expired giveaways every second
+setInterval(async () => {
+    const now = Date.now();
+    for (const [giveawayId, data] of activeGiveaways) {
+        if (data.endTime <= now && !data.ended) {
+            data.ended = true;
+            const channel = await client.channels.fetch(data.channelId).catch(() => null);
+            if (channel) {
+                await endGiveaway(giveawayId, channel, data.messageId, data.prize, data.winnerCount, data.hostId, data.participants, data.guildName, data.endTime, false);
+            }
+            saveGiveaways();
+        } else if (!data.ended) {
+            if (!data.lastUpdate || now - data.lastUpdate > 30000) {
+                data.lastUpdate = now;
+                const channel = await client.channels.fetch(data.channelId).catch(() => null);
+                if (channel) {
+                    await updateGiveawayEmbed(giveawayId, channel, data.messageId, data.prize, data.winnerCount, data.hostId, data.participants, data.endTime);
+                }
+            }
+        }
+    }
+}, 1000);
+
 // Load warnings from file
 function loadWarnings() {
     if (fs.existsSync(WARNINGS_FILE)) {
@@ -61,18 +229,18 @@ async function createTicketChannel(interaction, ticketType) {
     const user = interaction.user;
     const categoryId = '1497258380325027960';
     const supportRoleId = '1495189880760828075';
-    
+
     const existingChannel = guild.channels.cache.find(
         channel => channel.name === `ticket-${user.id}` && channel.parentId === categoryId
     );
-    
+
     if (existingChannel) {
         return interaction.reply({ 
             content: '❌ You already have an open ticket! Please close it first.', 
             ephemeral: true 
         });
     }
-    
+
     try {
         const channel = await guild.channels.create({
             name: `ticket-${user.id}`,
@@ -85,22 +253,22 @@ async function createTicketChannel(interaction, ticketType) {
                 { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] }
             ]
         });
-        
+
         const ticketEmbed = new EmbedBuilder()
             .setTitle('LawsHub Ticket Support')
             .setDescription(`<a:unknown:1495084306781962432> **Explain your problem in full detail, please wait for a LawsHub support team to review and answer.**\n\n**Ticket Type:** ${ticketCategories[ticketType]?.name || ticketType}\n**Created by:** ${user.toString()}\n**Claimed by:** Not yet claimed`)
             .setColor(0x2B017F);
-        
+
         await channel.send({ 
             content: `${user.toString()} <@&${supportRoleId}>`,
             embeds: [ticketEmbed] 
         });
-        
+
         await interaction.reply({ 
             content: `<a:unknown:1495084306781962432> Ticket created! Please continue in ${channel.toString()}`, 
             ephemeral: true 
         });
-        
+
     } catch (error) {
         console.error(error);
         await interaction.reply({ content: '❌ Failed to create ticket channel.', ephemeral: true });
@@ -206,6 +374,7 @@ const startTime = Date.now();
 
 client.once('ready', () => {
     console.log(`${client.user.tag} is online!`);
+    console.log(`📦 Loaded ${activeGiveaways.size} active giveaways`);
 });
 
 // Monitor nickname changes for forcenick
@@ -264,7 +433,7 @@ function getReason(argsArray, defaultReason = 'No reason provided') {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // ========== AFK SYSTEM - PING HANDLING (runs for EVERY message) ==========
+    // ========== AFK SYSTEM - PING HANDLING ==========
     if (message.mentions.users.size > 0 || message.reference) {
         for (const [userId, afkData] of afkUsers) {
             if (message.mentions.users.has(userId)) {
@@ -373,15 +542,228 @@ client.on('messageCreate', async (message) => {
         await message.reply({ embeds: [afkEmbed] });
     }
 
+    // ========== GIVEAWAY COMMANDS (.gw) ==========
+    if (command === 'gw') {
+        const subCommand = args[0]?.toLowerCase();
+        
+        // CREATE GIVEAWAY
+        if (subCommand === 'create') {
+            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return message.reply('❌ You need **Administrator** permission to start giveaways.');
+            }
+            
+            const duration = args[1];
+            const winnerCount = parseInt(args[2]);
+            const prize = args.slice(3).join(' ');
+            
+            if (!duration || !winnerCount || !prize) {
+                const helpEmbed = new EmbedBuilder()
+                    .setTitle('🎁 Giveaway Help 🎁')
+                    .setDescription(`**Usage:** \`.gw create <duration> <winners> <prize>\`\n\n**Examples:**\n\`.gw create 1h 1 Nitro\`\n\`.gw create 2d 3 Discord Nitro\`\n\`.gw create 30m 5 Steam Gift Card\`\n\n**Duration Formats:**\n\`10s\` - seconds\n\`5m\` - minutes\n\`2h\` - hours\n\`1d\` - days`)
+                    .setColor(0x2B017F);
+                return message.reply({ embeds: [helpEmbed] });
+            }
+            
+            if (isNaN(winnerCount) || winnerCount < 1 || winnerCount > 25) {
+                return message.reply('❌ Winner count must be between 1 and 25.');
+            }
+            
+            const durationMs = parseDuration(duration);
+            if (!durationMs) {
+                return message.reply('❌ Invalid duration format. Use: `10s`, `5m`, `2h`, `1d`');
+            }
+            
+            const endTime = Date.now() + durationMs;
+            const giveawayId = Date.now().toString();
+            const timeRemaining = Math.floor(endTime / 1000);
+            
+            const embed = new EmbedBuilder()
+                .setTitle('🎁 GIVEAWAY 🎁')
+                .setDescription(`**Prize:** ${prize}\n**Hosted by:** ${message.author.toString()}\n**Entries:** 0\n**Winners:** ${winnerCount}\n\nClick the button below to enter!`)
+                .addFields(
+                    { name: '⏰ Time Remaining', value: `<t:${timeRemaining}:R>`, inline: true },
+                    { name: '📅 Ends At', value: `<t:${timeRemaining}:F>`, inline: true }
+                )
+                .setColor(0x2B017F)
+                .setTimestamp();
+            
+            const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`giveaway_${giveawayId}`)
+                        .setLabel('🎉 Enter Giveaway')
+                        .setStyle(ButtonStyle.Success)
+                );
+            
+            const giveawayMsg = await message.channel.send({ embeds: [embed], components: [row] });
+            
+            activeGiveaways.set(giveawayId, {
+                channelId: message.channel.id,
+                messageId: giveawayMsg.id,
+                prize: prize,
+                winnerCount: winnerCount,
+                hostId: message.author.id,
+                participants: new Set(),
+                endTime: endTime,
+                ended: false,
+                lastUpdate: Date.now(),
+                guildName: message.guild.name
+            });
+            
+            saveGiveaways();
+            
+            const successEmbed = new EmbedBuilder()
+                .setTitle('✅ Giveaway Started!')
+                .setDescription(`**Prize:** ${prize}\n**Duration:** ${duration}\n**Winners:** ${winnerCount}\n**Ends:** <t:${timeRemaining}:F>\n\nCheck the giveaway message above to enter!`)
+                .setColor(0x00FF00);
+            
+            await message.reply({ embeds: [successEmbed] });
+            setTimeout(() => message.delete().catch(() => {}), 3000);
+        }
+        
+        // REROLL GIVEAWAY
+        else if (subCommand === 'reroll') {
+            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return message.reply('❌ You need **Administrator** permission to reroll giveaways.');
+            }
+            
+            const messageId = args[1];
+            if (!messageId) {
+                return message.reply('❌ Usage: `.gw reroll <message_id>`');
+            }
+            
+            let foundData = null;
+            for (const [id, data] of endedGiveaways) {
+                if (data.messageId === messageId) {
+                    foundData = data;
+                    break;
+                }
+            }
+            
+            if (!foundData) {
+                return message.reply('❌ Could not find that giveaway. Make sure the message ID is correct.');
+            }
+            
+            const participants = [...foundData.participants];
+            if (participants.length === 0) {
+                return message.reply('❌ No one participated in that giveaway!');
+            }
+            
+            const shuffled = [...participants];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
+            const newWinners = shuffled.slice(0, Math.min(foundData.winnerCount, shuffled.length));
+            const winnerMentions = newWinners.map(w => `<@${w}>`).join(', ');
+            
+            const rerollEmbed = new EmbedBuilder()
+                .setTitle('🎉 Giveaway Rerolled! 🎉')
+                .setDescription(`**Prize:** ${foundData.prize}\n\n**New Winner(s):** ${winnerMentions}\n\n**Total Entries:** ${participants.length}`)
+                .setColor(0x00FF00);
+            
+            await message.reply({ embeds: [rerollEmbed] });
+        }
+        
+        // END GIVEAWAY EARLY
+        else if (subCommand === 'end') {
+            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return message.reply('❌ You need **Administrator** permission to end giveaways early.');
+            }
+            
+            const messageId = args[1];
+            if (!messageId) {
+                return message.reply('❌ Usage: `.gw end <message_id>`');
+            }
+            
+            let foundGiveaway = null;
+            let foundData = null;
+            for (const [id, data] of activeGiveaways) {
+                if (data.messageId === messageId) {
+                    foundGiveaway = id;
+                    foundData = data;
+                    break;
+                }
+            }
+            
+            if (!foundData) {
+                return message.reply('❌ Could not find that giveaway.');
+            }
+            
+            if (foundData.ended) {
+                return message.reply('❌ That giveaway has already ended.');
+            }
+            
+            foundData.ended = true;
+            const channel = await message.guild.channels.fetch(foundData.channelId);
+            await endGiveaway(foundGiveaway, channel, foundData.messageId, foundData.prize, foundData.winnerCount, foundData.hostId, foundData.participants, foundData.guildName, foundData.endTime, true);
+            saveGiveaways();
+            
+            const endEmbed = new EmbedBuilder()
+                .setTitle('✅ Giveaway Ended Early')
+                .setDescription(`**Prize:** ${foundData.prize}\n\nGiveaway ended early by ${message.author.toString()}. Winners announced above.`)
+                .setColor(0xFFA500);
+            
+            await message.reply({ embeds: [endEmbed] });
+            setTimeout(() => message.delete().catch(() => {}), 3000);
+        }
+        
+        // LIST GIVEAWAYS
+        else if (subCommand === 'list') {
+            if (activeGiveaways.size === 0 && endedGiveaways.size === 0) {
+                return message.reply('❌ There are no giveaways right now.');
+            }
+            
+            let description = '';
+            if (activeGiveaways.size > 0) {
+                description += '**🟢 Active Giveaways:**\n\n';
+                for (const [id, data] of activeGiveaways) {
+                    if (!data.ended) {
+                        const endsAt = Math.floor(data.endTime / 1000);
+                        description += `**Prize:** ${data.prize}\n**Entries:** ${data.participants.size}\n**Ends:** <t:${endsAt}:R>\n[Jump to giveaway](https://discord.com/channels/${message.guild.id}/${data.channelId}/${data.messageId})\n\n`;
+                    }
+                }
+            }
+            
+            if (endedGiveaways.size > 0) {
+                description += '\n**🔴 Ended Giveaways (can reroll):**\n\n';
+                let count = 0;
+                for (const [id, data] of endedGiveaways) {
+                    if (count < 10) {
+                        description += `**Prize:** ${data.prize}\n**Entries:** ${data.participants.size}\n**Message ID:** \`${data.messageId}\`\n\n`;
+                        count++;
+                    }
+                }
+            }
+            
+            const listEmbed = new EmbedBuilder()
+                .setTitle('🎁 Giveaway List 🎁')
+                .setDescription(description)
+                .setColor(0x2B017F);
+            
+            await message.reply({ embeds: [listEmbed] });
+        }
+        
+        // HELP
+        else {
+            const helpEmbed = new EmbedBuilder()
+                .setTitle('🎁 Giveaway Commands 🎁')
+                .setDescription(`**Commands:**\n\n\`.gw create <duration> <winners> <prize>\` - Start a giveaway\n\`.gw reroll <message_id>\` - Pick new winners\n\`.gw end <message_id>\` - End giveaway early\n\`.gw list\` - List active giveaways\n\`.gw help\` - Show this help\n\n**Duration Formats:**\n\`10s\` - seconds\n\`5m\` - minutes\n\`2h\` - hours\n\`1d\` - days`)
+                .setColor(0x2B017F);
+            
+            await message.reply({ embeds: [helpEmbed] });
+        }
+    }
+
     // ========== TICKET PANEL COMMAND ==========
     if (command === 'ticketpanel') {
         const targetChannel = message.mentions.channels.first() || message.channel;
-        
+
         const panelEmbed = new EmbedBuilder()
             .setTitle('LawsHub Support')
             .setDescription('**Please select a button below to open a ticket.**')
             .setColor(0x2B017F);
-        
+
         const row = new ActionRowBuilder()
             .addComponents(
                 new ButtonBuilder()
@@ -390,7 +772,7 @@ client.on('messageCreate', async (message) => {
                     .setStyle(ButtonStyle.Primary)
                     .setEmoji('1497257556295422132')
             );
-        
+
         await targetChannel.send({ embeds: [panelEmbed], components: [row] });
         await message.reply(`✅ Ticket panel sent to ${targetChannel.toString()}`);
     }
@@ -398,101 +780,98 @@ client.on('messageCreate', async (message) => {
     // ========== TICKET COMMANDS ==========
     if (command === 'ticket') {
         const subCommand = args[0]?.toLowerCase();
-        
+
         if (!message.channel.name.startsWith('ticket-')) {
             return message.reply('❌ This command can only be used in a ticket channel.');
         }
-        
+
         const userId = message.channel.name.replace('ticket-', '');
         const ticketOwner = await message.guild.members.fetch(userId).catch(() => null);
         const supportRoleId = '1495189880760828075';
-        
-        // CLAIM
+
         if (subCommand === 'claim') {
             if (!message.member.roles.cache.has(supportRoleId)) {
                 return message.reply('❌ You need the Support role to claim tickets.');
             }
-            
+
             if (claimedTickets.has(message.channel.id)) {
                 const claimer = await message.guild.members.fetch(claimedTickets.get(message.channel.id)).catch(() => null);
                 return message.reply(`❌ This ticket is already claimed by ${claimer?.user.toString() || 'someone'}.`);
             }
-            
+
             await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { ViewChannel: false });
             await message.channel.permissionOverwrites.edit(supportRoleId, { ViewChannel: false });
             await message.channel.permissionOverwrites.edit(message.author.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-            
+
             if (ticketOwner) {
                 await message.channel.permissionOverwrites.edit(ticketOwner.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
             }
-            
+
             claimedTickets.set(message.channel.id, message.author.id);
-            
+
             const embed = new EmbedBuilder()
                 .setTitle('Ticket Claimed')
                 .setDescription(`<a:unknown:1495084306781962432> **Ticket claimed by ${message.author.toString()}**\n\nThis ticket is now private.`)
                 .setColor(0x00FF00);
-            
+
             await message.reply({ embeds: [embed] });
         }
-        
-        // TRANSFER
+
         else if (subCommand === 'transfer') {
             const targetInput = args[1];
             if (!targetInput) {
                 return message.reply('❌ Please mention a user to transfer this ticket to. Example: `.ticket transfer @user`');
             }
-            
+
             if (!message.member.roles.cache.has(supportRoleId)) {
                 return message.reply('❌ You need the Support role to transfer tickets.');
             }
-            
+
             const targetUserId = getUserIdFromInput(targetInput);
             if (!targetUserId) {
                 return message.reply('❌ Invalid user.');
             }
-            
+
             const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
             if (!targetMember) {
                 return message.reply('❌ Could not find that user.');
             }
-            
+
             const currentClaimerId = claimedTickets.get(message.channel.id);
-            
+
             if (currentClaimerId) {
                 await message.channel.permissionOverwrites.delete(currentClaimerId);
             }
-            
+
             await message.channel.permissionOverwrites.edit(targetMember.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
-            
+
             claimedTickets.set(message.channel.id, targetMember.id);
-            
+
             const embed = new EmbedBuilder()
                 .setTitle('Ticket Transferred')
                 .setDescription(`<a:unknown:1495084306781962432> **Ticket transferred to ${targetMember.toString()}**\n\nTransferred by: ${message.author.toString()}`)
                 .setColor(0xFFA500);
-            
+
             await message.reply({ embeds: [embed] });
         }
-        
-        // CLOSE
+
         else if (subCommand === 'close') {
             const reason = args.slice(1).join(' ') || 'No reason provided';
-            
+
             const ticketOwnerId = message.channel.name.replace('ticket-', '');
             const ticketOwnerMember = await message.guild.members.fetch(ticketOwnerId).catch(() => null);
             const claimedById = claimedTickets.get(message.channel.id);
             const claimedByMember = claimedById ? await message.guild.members.fetch(claimedById).catch(() => null) : null;
-            
+
             const messages = await message.channel.messages.fetch({ limit: 100 });
             const transcript = messages.reverse().map(m => `[${m.createdAt.toLocaleString()}] ${m.author.tag}: ${m.content}`).join('\n');
-            
+
             const logChannelId = '1497258421953499146';
             const logChannel = await message.guild.channels.fetch(logChannelId).catch(() => null);
-            
+
             if (logChannel) {
                 const closedAt = Math.floor(Date.now() / 1000);
-                
+
                 const logEmbed = new EmbedBuilder()
                     .setTitle('Ticket Closed')
                     .setDescription(`Closed by ${message.author.toString()}`)
@@ -506,9 +885,9 @@ client.on('messageCreate', async (message) => {
                     )
                     .setColor(0xFF0000)
                     .setTimestamp();
-                
+
                 await logChannel.send({ embeds: [logEmbed] });
-                
+
                 if (transcript.length > 0) {
                     const transcriptBuffer = Buffer.from(transcript, 'utf-8');
                     await logChannel.send({ 
@@ -517,11 +896,11 @@ client.on('messageCreate', async (message) => {
                     }).catch(() => {});
                 }
             }
-            
+
             if (ticketOwnerMember) {
                 try {
                     const transcriptBuffer = Buffer.from(transcript, 'utf-8');
-                    
+
                     const dmEmbed = new EmbedBuilder()
                         .setTitle('🎫 Ticket Closed')
                         .setDescription(`Your ticket in **${message.guild.name}** has been closed.`)
@@ -532,7 +911,7 @@ client.on('messageCreate', async (message) => {
                         )
                         .setColor(0xFF0000)
                         .setTimestamp();
-                    
+
                     await ticketOwnerMember.send({ 
                         embeds: [dmEmbed],
                         files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }]
@@ -541,14 +920,14 @@ client.on('messageCreate', async (message) => {
                     console.log('Could not DM ticket owner');
                 }
             }
-            
+
             const embed = new EmbedBuilder()
                 .setTitle('Ticket Closed')
                 .setDescription(`<a:unknown:1495084306781962432> Ticket closed by ${message.author.toString()}\n**Reason:** ${reason}\n\nThis channel will be deleted in 5 seconds.`)
                 .setColor(0xFF0000);
-            
+
             await message.reply({ embeds: [embed] });
-            
+
             setTimeout(async () => {
                 try {
                     await message.channel.delete(`Closed by ${message.author.tag}: ${reason}`);
@@ -584,7 +963,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== ADMIN LIST COMMAND (.adminlist) ==========
+    // ========== ADMIN LIST COMMAND ==========
     if (command === 'adminlist') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return message.reply(`<:unknown:1495103708957118684> You need **Administrator** permission to view the admin list.`);
@@ -592,7 +971,6 @@ client.on('messageCreate', async (message) => {
 
         try {
             const adminMembers = [];
-
             await message.guild.members.fetch();
 
             for (const [id, member] of message.guild.members.cache) {
@@ -676,31 +1054,28 @@ client.on('messageCreate', async (message) => {
         }
 
         const roleInput = args.slice(1).join(' ');
-        
+
         if (roleInput) {
-            // Find role by partial name match (auto-complete)
             const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
             const matchedRoles = allRoles.filter(role => 
                 role.name.toLowerCase().includes(roleInput.toLowerCase())
             );
-            
+
             if (matchedRoles.size === 0) {
                 return message.reply(`Could not find any role matching "${roleInput}".`);
             }
-            
+
             if (matchedRoles.size > 1) {
                 const roleList = matchedRoles.map(r => `- ${r.name}`).join('\n');
                 return message.reply(`Multiple roles found matching "${roleInput}":\n${roleList}\n\nPlease be more specific.`);
             }
-            
+
             const targetRole = matchedRoles.first();
-            
-            // Check if user already has this role
+
             if (targetMember.roles.cache.has(targetRole.id)) {
                 return message.reply(`${targetMember.user.tag} already has the ${targetRole.name} role.`);
             }
-            
-            // Get current highest role
+
             const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
             let oldRole = null;
             let oldRoleName = 'None';
@@ -708,48 +1083,46 @@ client.on('messageCreate', async (message) => {
                 oldRole = userRoles.sort((a, b) => b.position - a.position).first();
                 oldRoleName = oldRole.name;
             }
-            
-            // Check hierarchy
+
             const highestBotRole = botMember.roles.highest;
             if (targetRole.position >= highestBotRole.position) {
                 return message.reply(`Cannot promote ${targetMember.user.tag} to ${targetRole.name} - that role is higher than or equal to my highest role.`);
             }
-            
+
             const memberHighestRole = message.member.roles.highest;
             if (targetRole.position >= memberHighestRole.position && message.member.id !== message.guild.ownerId) {
                 return message.reply(`Cannot promote ${targetMember.user.tag} to ${targetRole.name} - that role is higher than or equal to your highest role.`);
             }
-            
+
             try {
                 if (oldRole) {
                     await targetMember.roles.remove(oldRole, `Promoted by ${message.author.tag}`);
                 }
                 await targetMember.roles.add(targetRole, `Promoted by ${message.author.tag}`);
-                
+
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Promotion')
                     .setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n**Current role:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`)
                     .setColor(0x00FF00);
-                
+
                 await message.reply({ embeds: [embed] });
             } catch (error) {
                 console.error(error);
                 await message.reply('Failed to promote user.');
             }
         } else {
-            // Auto-promote to next higher role
             const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
-            
+
             if (userRoles.size === 0) {
                 return message.reply(`${targetMember.user.tag} has no roles to promote from. Use \`.promote @user RoleName\` to give them a specific role.`);
             }
-            
+
             const highestUserRole = userRoles.sort((a, b) => b.position - a.position).first();
             const oldRoleName = highestUserRole.name;
-            
+
             const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
             const sortedRoles = allRoles.sort((a, b) => b.position - a.position);
-            
+
             let nextRole = null;
             let foundCurrent = false;
             for (const role of sortedRoles.values()) {
@@ -759,30 +1132,30 @@ client.on('messageCreate', async (message) => {
                 }
                 if (role.id === highestUserRole.id) foundCurrent = true;
             }
-            
+
             if (!nextRole) {
                 return message.reply(`${targetMember.user.tag} already has the highest role in the server!`);
             }
-            
+
             const highestBotRole = botMember.roles.highest;
             if (nextRole.position >= highestBotRole.position) {
                 return message.reply(`Cannot promote ${targetMember.user.tag} to ${nextRole.name} - that role is higher than or equal to my highest role.`);
             }
-            
+
             const memberHighestRole = message.member.roles.highest;
             if (nextRole.position >= memberHighestRole.position && message.member.id !== message.guild.ownerId) {
                 return message.reply(`Cannot promote ${targetMember.user.tag} to ${nextRole.name} - that role is higher than or equal to your highest role.`);
             }
-            
+
             try {
                 await targetMember.roles.remove(highestUserRole, `Promoted by ${message.author.tag}`);
                 await targetMember.roles.add(nextRole, `Promoted by ${message.author.tag}`);
-                
+
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Promotion')
                     .setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n**Current role:** ${nextRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`)
                     .setColor(0x00FF00);
-                
+
                 await message.reply({ embeds: [embed] });
             } catch (error) {
                 console.error(error);
@@ -815,84 +1188,75 @@ client.on('messageCreate', async (message) => {
         }
 
         const roleInput = args.slice(1).join(' ');
-        
+
         if (roleInput) {
-            // Find role by partial name match (auto-complete)
             const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
             const matchedRoles = allRoles.filter(role => 
                 role.name.toLowerCase().includes(roleInput.toLowerCase())
             );
-            
+
             if (matchedRoles.size === 0) {
                 return message.reply(`Could not find any role matching "${roleInput}".`);
             }
-            
+
             if (matchedRoles.size > 1) {
                 const roleList = matchedRoles.map(r => `- ${r.name}`).join('\n');
                 return message.reply(`Multiple roles found matching "${roleInput}":\n${roleList}\n\nPlease be more specific.`);
             }
-            
+
             const targetRole = matchedRoles.first();
-            
-            // Check if user has this role
+
             if (!targetMember.roles.cache.has(targetRole.id)) {
                 return message.reply(`${targetMember.user.tag} does not have the ${targetRole.name} role.`);
             }
-            
-            // Get all roles the user has (excluding @everyone)
+
             const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
-            
-            // Filter roles that are ABOVE or EQUAL to the target role (to remove)
             const rolesToRemove = userRoles.filter(role => role.position >= targetRole.position);
-            
+
             if (rolesToRemove.size === 0) {
                 return message.reply(`No roles above or equal to ${targetRole.name} to remove.`);
             }
-            
+
             const removedRoleNames = rolesToRemove.map(role => role.name).join(', ');
-            
-            // Check bot role hierarchy for the highest role being removed
             const highestRemovingRole = rolesToRemove.sort((a, b) => b.position - a.position).first();
             const highestBotRole = botMember.roles.highest;
-            
+
             if (highestRemovingRole.position >= highestBotRole.position) {
                 return message.reply(`Cannot remove ${highestRemovingRole.name} - that role is higher than or equal to my highest role.`);
             }
-            
+
             const memberHighestRole = message.member.roles.highest;
             if (highestRemovingRole.position >= memberHighestRole.position && message.member.id !== message.guild.ownerId) {
                 return message.reply(`Cannot remove ${highestRemovingRole.name} - that role is higher than or equal to your highest role.`);
             }
-            
+
             try {
-                // Remove all roles down to the target role
                 for (const role of rolesToRemove.values()) {
                     await targetMember.roles.remove(role, `Demoted by ${message.author.tag}`);
                 }
-                
+
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Demotion')
                     .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Removed Roles:** ${removedRoleNames}\n**Demoted down to:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`)
                     .setColor(0xFF0000);
-                
+
                 await message.reply({ embeds: [embed] });
             } catch (error) {
                 console.error(error);
                 await message.reply('Failed to demote user.');
             }
         } else {
-            // No role specified - demote by one role (original behavior)
             const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
-            
+
             if (userRoles.size === 0) {
                 return message.reply(`${targetMember.user.tag} has no roles to demote from.`);
             }
-            
+
             const lowestUserRole = userRoles.sort((a, b) => a.position - b.position).first();
-            
+
             const allRoles = message.guild.roles.cache.filter(role => role.name !== '@everyone');
             const sortedRoles = allRoles.sort((a, b) => a.position - b.position);
-            
+
             let roleToGive = null;
             let foundCurrent = false;
             for (const role of sortedRoles.values()) {
@@ -902,20 +1266,20 @@ client.on('messageCreate', async (message) => {
                 }
                 if (role.id === lowestUserRole.id) foundCurrent = true;
             }
-            
+
             if (!roleToGive) {
                 return message.reply(`${targetMember.user.tag} already has the lowest role in the server!`);
             }
-            
+
             try {
                 await targetMember.roles.add(roleToGive);
                 await targetMember.roles.remove(lowestUserRole);
-                
+
                 const embed = new EmbedBuilder()
                     .setTitle('LawsHub Demotion')
                     .setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${lowestUserRole.name}\n**Current role:** ${roleToGive.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`)
                     .setColor(0xFF0000);
-                
+
                 await message.reply({ embeds: [embed] });
             } catch (error) {
                 console.error(error);
@@ -1748,7 +2112,7 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ========== WARN COMMAND (with auto-actions) ==========
+    // ========== WARN COMMAND ==========
     if (command === 'warn') {
         const userInput = args[0];
         if (!userInput) {
@@ -1801,7 +2165,6 @@ client.on('messageCreate', async (message) => {
         saveWarnings();
 
         const warnCount = warns.get(userId).length;
-
         const actionTaken = await processWarnActions(userId, message.guild, message.author.id);
 
         let actionMessage = '';
@@ -1865,16 +2228,6 @@ client.on('messageCreate', async (message) => {
         await message.reply({ embeds: [embed] });
     }
 
-    // ========== HELP COMMAND ==========
-    if (command === 'help') {
-        const helpEmbed = new EmbedBuilder()
-            .setTitle('LawsHub | Help')
-            .setDescription(`Prefix : \`.\`\n\n<:2904notifystaff:1497275164818280480>︱AFK\n\`- afk <reason>\`\n\n<:3007link:1497275170631450777>︱Ticket System\n\`- ticket claim\`\n\`- ticket transfer <@user>\`\n\`- ticket close <reason>\`\n\n<:7428whitemember:1497274951521275995>︱Owner \n\`- say\`\n\`- stats\`\n\`- adminlist\`\n\n<:5448staffwhite:1497275091539726418>︱Role Management\n\`- promote\`\n\`- demote\`\n\`- wipe\`\n\`- unwipe\`\n\n<:7240partnerwhite:1497275068265271446>︱Nickname\n\`- fn\`\n\`- rfn\`\n\n<:7964modbadgewhite:1497275047528628314>︱Channel\n\`- lock\`\n\`- unlock\`\n\`- purge\`\n\n<:56832developer:1497274968507941026>︱Punishments\n\`- ban\`\n\`- unban\`\n\`- iunban\`\n\`- kick\`\n\`- mute\`\n\`- unmute\`\n\n<:6304whitesmalldot:1497275082836414675>︱Warning system\n\`- warn\`\n\`- unwarn\`\n\`- warns\`\n\`- cw\``)
-            .setColor(0x2A017F); // 2752767 decimal = 0x2A017F
-
-        await message.reply({ embeds: [helpEmbed] });
-    }
-    
     // ========== WARNS COMMAND ==========
     if (command === 'warns') {
         let targetUserId = message.author.id;
@@ -1923,6 +2276,53 @@ client.on('messageCreate', async (message) => {
 
         await message.reply({ embeds: [embed] });
     }
+
+    // ========== HELP COMMAND ==========
+    if (command === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setTitle('LawsHub | Help')
+            .setDescription(`Prefix : \`.\`\n\n<:2904notifystaff:1497275164818280480>︱AFK\n\`- afk <reason>\`\n\n<:3007link:1497275170631450777>︱Ticket System\n\`- ticket claim\`\n\`- ticket transfer <@user>\`\n\`- ticket close <reason>\`\n\n<:7428whitemember:1497274951521275995>︱Owner \n\`- say\`\n\`- stats\`\n\`- adminlist\`\n\n<:5448staffwhite:1497275091539726418>︱Role Management\n\`- promote\`\n\`- demote\`\n\`- wipe\`\n\`- unwipe\`\n\n<:7240partnerwhite:1497275068265271446>︱Nickname\n\`- fn\`\n\`- rfn\`\n\n<:7964modbadgewhite:1497275047528628314>︱Channel\n\`- lock\`\n\`- unlock\`\n\`- purge\`\n\n<:56832developer:1497274968507941026>︱Punishments\n\`- ban\`\n\`- unban\`\n\`- iunban\`\n\`- kick\`\n\`- mute\`\n\`- unmute\`\n\n<:6304whitesmalldot:1497275082836414675>︱Warning system\n\`- warn\`\n\`- unwarn\`\n\`- warns\`\n\`- cw\`\n\n🎁︱Giveaway\n\`- gw create <duration> <winners> <prize>\`\n\`- gw reroll <message_id>\`\n\`- gw end <message_id>\`\n\`- gw list\``)
+            .setColor(0x2A017F);
+
+        await message.reply({ embeds: [helpEmbed] });
+    }
+});
+
+// Handle button interactions for giveaways
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isButton()) return;
+    if (!interaction.customId.startsWith('giveaway_')) return;
+    
+    const giveawayId = interaction.customId.replace('giveaway_', '');
+    const giveaway = activeGiveaways.get(giveawayId);
+    
+    if (!giveaway) {
+        return interaction.reply({ content: '❌ This giveaway has ended or does not exist.', ephemeral: true });
+    }
+    
+    if (giveaway.ended) {
+        return interaction.reply({ content: '❌ This giveaway has already ended.', ephemeral: true });
+    }
+    
+    if (giveaway.endTime <= Date.now()) {
+        giveaway.ended = true;
+        const channel = await interaction.guild.channels.fetch(giveaway.channelId);
+        await endGiveaway(giveawayId, channel, giveaway.messageId, giveaway.prize, giveaway.winnerCount, giveaway.hostId, giveaway.participants, giveaway.guildName, giveaway.endTime, false);
+        saveGiveaways();
+        return interaction.reply({ content: '❌ This giveaway has ended.', ephemeral: true });
+    }
+    
+    if (giveaway.participants.has(interaction.user.id)) {
+        return interaction.reply({ content: '❌ You have already entered this giveaway!', ephemeral: true });
+    }
+    
+    giveaway.participants.add(interaction.user.id);
+    saveGiveaways();
+    
+    const channel = await interaction.guild.channels.fetch(giveaway.channelId);
+    await updateGiveawayEmbed(giveawayId, channel, giveaway.messageId, giveaway.prize, giveaway.winnerCount, giveaway.hostId, giveaway.participants, giveaway.endTime);
+    
+    await interaction.reply({ content: '🎉 You have entered the giveaway! Good luck!', ephemeral: true });
 });
 
 // Handle button interactions for tickets
