@@ -943,10 +943,7 @@ client.on('messageCreate', async (message) => {
 
     // ========== SAY COMMAND (Owner Only) ==========
     if (command === 'say') {
-        const OWNER_ID = 
-'1413103929931337751',
-'856260234342039682',
-'1329319330034221057';
+ const OWNER_IDS = ['1413103929931337751', '856260234342039682', '1329319330034221057'];
 
         if (message.author.id !== OWNER_ID) {
             return message.reply(`<:unknown:1495103708957118684> Only the bot owner can use this command.`);
