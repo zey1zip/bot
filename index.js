@@ -35,8 +35,7 @@ const warnActions = {
 };
 
 // ASHY-CHAN
-
-const TARGET_USER_ID = '1459349290806677733';
+client.on('messageCreate', async (message) => {
 
     if (command === 'ash') {
         const TARGET_USER_ID = '1459349290806677733';
