@@ -52,6 +52,7 @@ client.on('messageCreate', async (message) => {
         }
 
     }
+});
 
 // ========== GIVEAWAY SYSTEM ==========
 const activeGiveaways = new Map();
