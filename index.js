@@ -515,21 +515,6 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // ========== ASH COMMAND ==========
-    if (command === 'ash') {
-        const TARGET_USER_ID = '1459349290806677733';
-
-        try {
-            const targetUser = await client.users.fetch(TARGET_USER_ID);
-            await targetUser.send(`All love from zippy !! <:unknown:1500505300711772283>`);
-            await message.reply(`Message succesfully sent to ashy-chan !!`);
-        } catch (error) {
-            console.error(error);
-            await message.channel.send(`<@${TARGET_USER_ID}> All love from zippy <:unknown:1500505300711772283>`);
-            await message.reply(`⚠️ Couldn't DM that user (they may have DMs disabled), so I mentioned them here instead.`);
-        }
-    }
-
     // ========== AFK SET COMMAND ==========
     if (command === 'afk') {
         const reason = args.join(' ') || 'No reason provided';
