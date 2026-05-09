@@ -2749,4 +2749,5 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-client.login(DISCORD_TOKEN);
+const token = process.env.DISCORD_TOKEN
+client.login(token);
