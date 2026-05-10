@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, REST, Routes } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, REST, Routes } = require('discord.js');
 const fs = require('fs');
 
 const client = new Client({
@@ -306,6 +306,11 @@ async function createTicketChannel(interaction, ticketType) {
                     .setLabel('Claim Ticket')
                     .setStyle(ButtonStyle.Success)
                     .setEmoji('1501147032104992810'),
+                new ButtonBuilder()
+                    .setCustomId('ticket_transfer')
+                    .setLabel('Transfer Ticket')
+                    .setStyle(ButtonStyle.Primary)
+                    .setEmoji('1501148457929281546'),
                 new ButtonBuilder()
                     .setCustomId('ticket_close')
                     .setLabel('Close Ticket')
@@ -2589,6 +2594,20 @@ client.on('interactionCreate', async (interaction) => {
             await ticketMsg.edit({ embeds: [updatedEmbed] });
         }
     }
+
+    // Handle ticket transfer button
+    if (interaction.customId === 'ticket_transfer') {
+        if (!interaction.channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ This button can only be used in a ticket channel.', ephemeral: true });
+        const supportRoleId = '1495189880760828075';
+        if (!interaction.member.roles.cache.has(supportRoleId)) return interaction.reply({ content: '❌ You need the Support role to transfer tickets.', ephemeral: true });
+        const userSelect = new UserSelectMenuBuilder()
+            .setCustomId(`ticket_transfer_select_${interaction.channel.id}`)
+            .setPlaceholder('Select a support member to transfer the ticket to')
+            .setMinValues(1)
+            .setMaxValues(1);
+        const row = new ActionRowBuilder().addComponents(userSelect);
+        await interaction.reply({ content: 'Please select a user to transfer this ticket to:', components: [row], ephemeral: true });
+    }
     
     // Handle ticket close button
     if (interaction.customId === 'ticket_close') {
@@ -2647,6 +2666,36 @@ client.on('interactionCreate', async (interaction) => {
         setTimeout(async () => { try { await interaction.channel.delete(`Closed by ${interaction.user.tag}: ${reason}`); } catch (err) {} }, 5000);
         ticketData.delete(interaction.channel.id);
         claimedTickets.delete(interaction.channel.id);
+    }
+
+    // Handle ticket transfer selection
+    if (interaction.isUserSelectMenu() && interaction.customId.startsWith('ticket_transfer_select_')) {
+        const targetChannelId = interaction.customId.replace('ticket_transfer_select_', '');
+        if (interaction.channel.id !== targetChannelId) return interaction.reply({ content: '❌ This transfer selection is no longer valid for this channel.', ephemeral: true });
+        if (!interaction.channel.name.startsWith('ticket-')) return interaction.reply({ content: '❌ This can only be used in a ticket channel.', ephemeral: true });
+        const supportRoleId = '1495189880760828075';
+        if (!interaction.member.roles.cache.has(supportRoleId)) return interaction.reply({ content: '❌ You need the Support role to transfer tickets.', ephemeral: true });
+        const targetUserId = interaction.values[0];
+        const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
+        if (!targetMember) return interaction.reply({ content: '❌ Could not find that user.', ephemeral: true });
+        const currentClaimerId = claimedTickets.get(interaction.channel.id);
+        if (currentClaimerId && currentClaimerId !== targetMember.id) {
+            await interaction.channel.permissionOverwrites.delete(currentClaimerId).catch(() => {});
+        }
+        await interaction.channel.permissionOverwrites.edit(targetMember.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true }).catch(() => {});
+        claimedTickets.set(interaction.channel.id, targetMember.id);
+        const replyEmbed = new EmbedBuilder().setTitle('Ticket Transferred').setDescription(`<a:unknown:1495084306781962432> **Ticket transferred to ${targetMember.toString()}**
+
+Transferred by: ${interaction.user.toString()}`).setColor(0xFFA500);
+        await interaction.update({ content: '✅ Ticket transferred successfully.', embeds: [replyEmbed], components: [] });
+        const messages = await interaction.channel.messages.fetch({ limit: 10 });
+        const ticketMsg = messages.find(m => m.embeds.length > 0 && m.embeds[0].title === 'LawsHub Ticket Support');
+        if (ticketMsg) {
+            const updatedEmbed = EmbedBuilder.from(ticketMsg.embeds[0]);
+            updatedEmbed.setDescription(updatedEmbed.data.description.replace(/\*\*Claimed by:\*\*.*$/m, `**Claimed by:** ${targetMember.toString()}`));
+            await ticketMsg.edit({ embeds: [updatedEmbed] }).catch(() => {});
+        }
+        return;
     }
     
     // Handle confirmation buttons
