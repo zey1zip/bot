@@ -21,6 +21,9 @@ const afkUsers = new Map();
 const claimedTickets = new Map();
 const pendingActions = new Map();
 const ticketData = new Map();
+const ticketClaimCounts = new Map();
+const ticketTranscripts = new Map();
+const TICKET_CLAIM_COUNTS_FILE = './ticket_claim_counts.json';
 
 const ticketCategories = {
     'script-key': { name: 'Script/Key Support', emoji: '1497257556295422132' }
@@ -272,14 +275,47 @@ function saveWarnings() {
     fs.writeFileSync(WARNINGS_FILE, JSON.stringify(obj, null, 2));
 }
 
+function loadTicketClaimCounts() {
+    if (fs.existsSync(TICKET_CLAIM_COUNTS_FILE)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(TICKET_CLAIM_COUNTS_FILE, 'utf8'));
+            ticketClaimCounts.clear();
+            for (const [key, value] of Object.entries(data)) {
+                ticketClaimCounts.set(key, Number(value));
+            }
+            console.log(`✅ Loaded ${ticketClaimCounts.size} ticket claim counts`);
+        } catch (e) {}
+    }
+}
+
+function saveTicketClaimCounts() {
+    const obj = Object.fromEntries(ticketClaimCounts);
+    fs.writeFileSync(TICKET_CLAIM_COUNTS_FILE, JSON.stringify(obj, null, 2));
+}
+
+function incrementTicketClaimCount(userId) {
+    const current = ticketClaimCounts.get(userId) || 0;
+    const next = current + 1;
+    ticketClaimCounts.set(userId, next);
+    saveTicketClaimCounts();
+    return next;
+}
+
+function storeTicketTranscript(channelId, transcriptData) {
+    ticketTranscripts.set(channelId, transcriptData);
+    setTimeout(() => ticketTranscripts.delete(channelId), 60 * 60 * 1000);
+}
+
 loadWarnings();
+loadTicketClaimCounts();
 
 async function createTicketChannel(interaction, ticketType) {
     const guild = interaction.guild;
     const user = interaction.user;
     const categoryId = '1497258380325027960';
     const supportRoleId = '1495189880760828075';
-    const existingChannel = guild.channels.cache.find(channel => channel.name === `ticket-${user.id}` && channel.parentId === categoryId);
+    const channels = await guild.channels.fetch().catch(() => guild.channels.cache);
+    const existingChannel = channels.find(channel => channel.name === `ticket-${user.id}` && channel.type === 0);
     if (existingChannel) {
         return interaction.reply({ content: '❌ You already have an open ticket! Please close it first.', ephemeral: true });
     }
@@ -689,6 +725,7 @@ client.on('messageCreate', async (message) => {
             await message.channel.permissionOverwrites.edit(message.author.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
             if (ticketOwner) await message.channel.permissionOverwrites.edit(ticketOwner.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
             claimedTickets.set(message.channel.id, message.author.id);
+            incrementTicketClaimCount(message.author.id);
             const embed = new EmbedBuilder().setTitle('Ticket Claimed').setDescription(`<a:unknown:1495084306781962432> **Ticket claimed by ${message.author.toString()}**\n\nThis ticket is now private.`).setColor(0x00FF00);
             await message.reply({ embeds: [embed] });
         } else if (subCommand === 'transfer') {
@@ -717,6 +754,12 @@ client.on('messageCreate', async (message) => {
             const logChannel = await message.guild.channels.fetch(logChannelId).catch(() => null);
             if (logChannel) {
                 const closedAt = Math.floor(Date.now() / 1000);
+                const row = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`ticket_transcript_${message.channel.id}`)
+                        .setLabel('View Transcript')
+                        .setStyle(ButtonStyle.Primary)
+                );
                 const logEmbed = new EmbedBuilder()
                     .setTitle('Ticket Closed')
                     .setDescription(`Closed by ${message.author.toString()}`)
@@ -730,10 +773,9 @@ client.on('messageCreate', async (message) => {
                     )
                     .setColor(0xFF0000)
                     .setTimestamp();
-                await logChannel.send({ embeds: [logEmbed] });
+                await logChannel.send({ embeds: [logEmbed], components: [row] });
                 if (transcript.length > 0) {
-                    const transcriptBuffer = Buffer.from(transcript, 'utf-8');
-                    await logChannel.send({ content: `📝 **Transcript for ${message.channel.name}**`, files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }] }).catch(() => {});
+                    storeTicketTranscript(message.channel.id, { transcript, channelName: message.channel.name });
                 }
             }
             if (ticketOwnerMember) {
@@ -749,7 +791,7 @@ client.on('messageCreate', async (message) => {
                         )
                         .setColor(0xFF0000)
                         .setTimestamp();
-                    await ticketOwnerMember.send({ embeds: [dmEmbed], files: [{ attachment: transcriptBuffer, name: `transcript-${message.channel.name}.txt` }] });
+                    await ticketOwnerMember.send({ embeds: [dmEmbed] });
                 } catch (err) {}
             }
             const embed = new EmbedBuilder()
@@ -823,6 +865,46 @@ client.on('messageCreate', async (message) => {
             .setColor(0x00FF00)
             .setTimestamp();
         await message.reply({ embeds: [embed] });
+    }
+
+    // USER INFO COMMAND
+    if (command === 'user') {
+        const targetInput = args[0];
+        let targetUser = message.mentions.users.first();
+        if (!targetUser && targetInput) {
+            const possibleId = getUserIdFromInput(targetInput);
+            if (possibleId) {
+                targetUser = await client.users.fetch(possibleId).catch(() => null);
+            }
+        }
+        if (!targetUser) targetUser = message.author;
+
+        const targetMember = await message.guild.members.fetch(targetUser.id).catch(() => null);
+        const nickname = targetMember?.nickname || 'None';
+        const highestRole = targetMember ? targetMember.roles.highest.name : 'None';
+        const accountCreated = new Date(targetUser.createdTimestamp).toLocaleString();
+        const serverJoined = targetMember?.joinedTimestamp ? new Date(targetMember.joinedTimestamp).toLocaleString() : 'Unknown';
+
+        const claimedCount = ticketClaimCounts.get(targetUser.id) || 0;
+        const userEmbed = new EmbedBuilder()
+            .setTitle('User Information')
+            .setThumbnail(targetUser.displayAvatarURL({ dynamic: true, size: 512 }))
+            .setColor(0x5865F2)
+            .addFields(
+                { name: 'USER ID', value: `\`${targetUser.id}\``, inline: true },
+                { name: 'USERNAME', value: `${targetUser.tag}`, inline: true },
+                { name: 'SERVER NICKNAME', value: `${nickname}`, inline: true },
+                { name: 'BOT', value: targetUser.bot ? 'Yes' : 'No', inline: true },
+                { name: 'ACCOUNT CREATED', value: accountCreated, inline: true },
+                { name: 'SERVER JOINED', value: serverJoined, inline: true },
+                { name: 'HIGHEST ROLE', value: `${highestRole}`, inline: true },
+                { name: 'TICKETS CLAIMED', value: `${claimedCount}`, inline: true }
+            )
+            .setFooter({ text: `Requested by ${message.author.tag}`, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+            .setTimestamp();
+
+        await message.reply({ embeds: [userEmbed] });
+        return;
     }
 
     // PROMOTE COMMAND
@@ -1710,6 +1792,7 @@ client.on('interactionCreate', async (interaction) => {
                     await interaction.channel.permissionOverwrites.edit(interaction.user.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
                     if (ticketOwner) await interaction.channel.permissionOverwrites.edit(ticketOwner.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
                     claimedTickets.set(interaction.channel.id, interaction.user.id);
+                    incrementTicketClaimCount(interaction.user.id);
                     const embed = new EmbedBuilder().setTitle('Ticket Claimed').setDescription(`<a:unknown:1495084306781962432> **Ticket claimed by ${interaction.user.toString()}**\n\nThis ticket is now private.`).setColor(0x00FF00);
                     await interaction.reply({ embeds: [embed] });
                 } else if (subCommand === 'transfer') {
@@ -1736,6 +1819,12 @@ client.on('interactionCreate', async (interaction) => {
                     const logChannel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
                     if (logChannel) {
                         const closedAt = Math.floor(Date.now() / 1000);
+                        const row = new ActionRowBuilder().addComponents(
+                            new ButtonBuilder()
+                                .setCustomId(`ticket_transcript_${interaction.channel.id}`)
+                                .setLabel('View Transcript')
+                                .setStyle(ButtonStyle.Primary)
+                        );
                         const logEmbed = new EmbedBuilder()
                             .setTitle('Ticket Closed')
                             .setDescription(`Closed by ${interaction.user.toString()}`)
@@ -1749,10 +1838,9 @@ client.on('interactionCreate', async (interaction) => {
                             )
                             .setColor(0xFF0000)
                             .setTimestamp();
-                        await logChannel.send({ embeds: [logEmbed] });
+                        await logChannel.send({ embeds: [logEmbed], components: [row] });
                         if (transcript.length > 0) {
-                            const transcriptBuffer = Buffer.from(transcript, 'utf-8');
-                            await logChannel.send({ content: `📝 **Transcript for ${interaction.channel.name}**`, files: [{ attachment: transcriptBuffer, name: `transcript-${interaction.channel.name}.txt` }] }).catch(() => {});
+                            storeTicketTranscript(interaction.channel.id, { transcript, channelName: interaction.channel.name });
                         }
                     }
                     if (ticketOwnerMember) {
@@ -1768,7 +1856,7 @@ client.on('interactionCreate', async (interaction) => {
                                 )
                                 .setColor(0xFF0000)
                                 .setTimestamp();
-                            await ticketOwnerMember.send({ embeds: [dmEmbed], files: [{ attachment: transcriptBuffer, name: `transcript-${interaction.channel.name}.txt` }] });
+                            await ticketOwnerMember.send({ embeds: [dmEmbed] });
                         } catch (err) {}
                     }
                     const embed = new EmbedBuilder()
@@ -2533,7 +2621,7 @@ client.on('interactionCreate', async (interaction) => {
         return;
     }
 
-    if (!interaction.isButton()) return;
+    if (!interaction.isButton() && !interaction.isUserSelectMenu()) return;
     
     // Handle giveaway buttons
     if (interaction.customId.startsWith('giveaway_')) {
@@ -2559,7 +2647,7 @@ client.on('interactionCreate', async (interaction) => {
     // Handle ticket buttons
     if (interaction.customId.startsWith('ticket_')) {
         const ticketType = interaction.customId.replace('ticket_', '');
-        if (ticketType === 'claim' || ticketType === 'close') {
+        if (ticketType === 'claim' || ticketType === 'close' || ticketType === 'transfer' || ticketType.startsWith('transcript_')) {
             // Handle action buttons
         } else {
             await createTicketChannel(interaction, ticketType);
@@ -2583,6 +2671,7 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.channel.permissionOverwrites.edit(interaction.user.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
         if (ticketOwner) await interaction.channel.permissionOverwrites.edit(ticketOwner.id, { ViewChannel: true, SendMessages: true, ReadMessageHistory: true });
         claimedTickets.set(interaction.channel.id, interaction.user.id);
+        incrementTicketClaimCount(interaction.user.id);
         const embed = new EmbedBuilder().setTitle('Ticket Claimed').setDescription(`<a:unknown:1495084306781962432> **Ticket claimed by ${interaction.user.toString()}**\n\nThis ticket is now private.`).setColor(0x00FF00);
         await interaction.reply({ embeds: [embed] });
         // Update the embed to show claimed
@@ -2623,6 +2712,12 @@ client.on('interactionCreate', async (interaction) => {
         const logChannel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
         if (logChannel) {
             const closedAt = Math.floor(Date.now() / 1000);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`ticket_transcript_${interaction.channel.id}`)
+                    .setLabel('View Transcript')
+                    .setStyle(ButtonStyle.Primary)
+            );
             const logEmbed = new EmbedBuilder()
                 .setTitle('Ticket Closed')
                 .setDescription(`Closed by ${interaction.user.toString()}`)
@@ -2636,15 +2731,13 @@ client.on('interactionCreate', async (interaction) => {
                 )
                 .setColor(0xFF0000)
                 .setTimestamp();
-            await logChannel.send({ embeds: [logEmbed] });
+            await logChannel.send({ embeds: [logEmbed], components: [row] });
             if (transcript.length > 0) {
-                const transcriptBuffer = Buffer.from(transcript, 'utf-8');
-                await logChannel.send({ content: `📝 **Transcript for ${interaction.channel.name}**`, files: [{ attachment: transcriptBuffer, name: `transcript-${interaction.channel.name}.txt` }] }).catch(() => {});
+                storeTicketTranscript(interaction.channel.id, { transcript, channelName: interaction.channel.name });
             }
         }
         if (ticketOwnerMember) {
             try {
-                const transcriptBuffer = Buffer.from(transcript, 'utf-8');
                 const dmEmbed = new EmbedBuilder()
                     .setTitle('🎫 Ticket Closed')
                     .setDescription(`Your ticket in **${interaction.guild.name}** has been closed.`)
@@ -2655,7 +2748,7 @@ client.on('interactionCreate', async (interaction) => {
                     )
                     .setColor(0xFF0000)
                     .setTimestamp();
-                await ticketOwnerMember.send({ embeds: [dmEmbed], files: [{ attachment: transcriptBuffer, name: `transcript-${interaction.channel.name}.txt` }] });
+                await ticketOwnerMember.send({ embeds: [dmEmbed] });
             } catch (err) {}
         }
         const embed = new EmbedBuilder()
@@ -2695,6 +2788,15 @@ Transferred by: ${interaction.user.toString()}`).setColor(0xFFA500);
             updatedEmbed.setDescription(updatedEmbed.data.description.replace(/\*\*Claimed by:\*\*.*$/m, `**Claimed by:** ${targetMember.toString()}`));
             await ticketMsg.edit({ embeds: [updatedEmbed] }).catch(() => {});
         }
+        return;
+    }
+
+    if (interaction.isButton() && interaction.customId.startsWith('ticket_transcript_')) {
+        const channelId = interaction.customId.replace('ticket_transcript_', '');
+        const transcriptData = ticketTranscripts.get(channelId);
+        if (!transcriptData) return interaction.reply({ content: '❌ Transcript is not available or has expired.', ephemeral: true });
+        const transcriptBuffer = Buffer.from(transcriptData.transcript, 'utf-8');
+        await interaction.reply({ content: `📄 Transcript for ${transcriptData.channelName}`, files: [{ attachment: transcriptBuffer, name: `transcript-${transcriptData.channelName}.txt` }], ephemeral: true });
         return;
     }
     
