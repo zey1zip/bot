@@ -490,6 +490,22 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    if (message.guild && message.content.match(/(^|\s)keys?(\s|$|[.!?,])/i)) {
+        const supportRoleId = '1495209173086896158';
+        const keyChannelId = '1495210443042455755';
+        const member = await message.guild.members.fetch(message.author.id).catch(() => null);
+        if (member) {
+            const nonEveryoneRoles = member.roles.cache.filter(role => role.id !== message.guild.id);
+            if (nonEveryoneRoles.size === 1 && nonEveryoneRoles.has(supportRoleId)) {
+                try {
+                    await message.author.send(`The key is in <#${keyChannelId}>`);
+                } catch (error) {
+                    console.error(`Unable to DM user ${message.author.id}:`, error);
+                }
+            }
+        }
+    }
+
     // AFK SYSTEM - PING HANDLING
     if (message.mentions.users.size > 0 || message.reference) {
         for (const [userId, afkData] of afkUsers) {
