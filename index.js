@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, UserSelectMenuBuilder, REST, Routes } = require('discord.js');
 const fs = require('fs');
+const path = require('path');
 
 const client = new Client({
     intents: [
@@ -22,14 +23,16 @@ const claimedTickets = new Map();
 const pendingActions = new Map();
 const ticketData = new Map();
 const ticketClaimCounts = new Map();
+const commandCooldowns = new Map();
+const COMMAND_COOLDOWN_MS = 1500;
 const ticketTranscripts = new Map();
-const TICKET_CLAIM_COUNTS_FILE = './ticket_claim_counts.json';
+const TICKET_CLAIM_COUNTS_FILE = path.join(__dirname, 'ticket_claim_counts.json');
 
 const ticketCategories = {
     'script-key': { name: 'Script/Key Support', emoji: '1497257556295422132' }
 };
 
-const WARNINGS_FILE = './warnings.json';
+const WARNINGS_FILE = path.join(__dirname, 'warnings.json');
 let warns = new Map();
 
 const warnActions = {
@@ -272,7 +275,11 @@ function loadWarnings() {
 
 function saveWarnings() {
     const obj = Object.fromEntries(warns);
-    fs.writeFileSync(WARNINGS_FILE, JSON.stringify(obj, null, 2));
+    try {
+        fs.writeFileSync(WARNINGS_FILE, JSON.stringify(obj, null, 2));
+    } catch (error) {
+        console.error(`Failed to save warnings to ${WARNINGS_FILE}:`, error);
+    }
 }
 
 function loadTicketClaimCounts() {
@@ -290,7 +297,11 @@ function loadTicketClaimCounts() {
 
 function saveTicketClaimCounts() {
     const obj = Object.fromEntries(ticketClaimCounts);
-    fs.writeFileSync(TICKET_CLAIM_COUNTS_FILE, JSON.stringify(obj, null, 2));
+    try {
+        fs.writeFileSync(TICKET_CLAIM_COUNTS_FILE, JSON.stringify(obj, null, 2));
+    } catch (error) {
+        console.error(`Failed to save ticket claim counts to ${TICKET_CLAIM_COUNTS_FILE}:`, error);
+    }
 }
 
 function incrementTicketClaimCount(userId) {
@@ -544,6 +555,18 @@ client.on('messageCreate', async (message) => {
     }
 
     if (!message.content.startsWith(PREFIX)) return;
+
+    const now = Date.now();
+    const cooldownExpiry = commandCooldowns.get(message.author.id);
+    if (cooldownExpiry && cooldownExpiry > now) {
+        const remainingSeconds = ((cooldownExpiry - now) / 1000).toFixed(1).replace(/\.0$/, '');
+        return message.reply(`Chill out twin , wait ${remainingSeconds} seconds. <:unknown:1506371070427660288>`);
+    }
+    const newExpiry = now + COMMAND_COOLDOWN_MS;
+    commandCooldowns.set(message.author.id, newExpiry);
+    setTimeout(() => {
+        if (commandCooldowns.get(message.author.id) === newExpiry) commandCooldowns.delete(message.author.id);
+    }, COMMAND_COOLDOWN_MS);
 
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
