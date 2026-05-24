@@ -14,6 +14,7 @@ const client = new Client({
 });
 
 const PREFIX = '.';
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || '1496845514208051291';
 const roleBackups = new Map();
 const jailBackups = new Map();
 const forcedNicknames = new Map();
@@ -62,6 +63,64 @@ function createErrorEmbed(title, description) {
         .setColor(0xFF0000)
         .setTimestamp();
     return embed;
+}
+
+function createLogEmbed(message, command, args, targetUserId) {
+    const fields = [
+        { name: 'Command', value: `\`${PREFIX}${command}\``, inline: true },
+        { name: 'Author', value: `${message.author.toString()} (\`${message.author.id}\`)`, inline: true },
+        { name: 'Channel', value: `${message.channel.toString()}`, inline: true }
+    ];
+    if (targetUserId) {
+        fields.push({ name: 'Target', value: `<@${targetUserId}>`, inline: true });
+    }
+    if (args.length) {
+        fields.push({ name: 'Arguments', value: args.join(' '), inline: false });
+    }
+    if (message.reference?.messageId) {
+        fields.push({ name: 'Reply To', value: `Message ID: ${message.reference.messageId}`, inline: false });
+    }
+
+    return new EmbedBuilder()
+        .setTitle('Command Log')
+        .setDescription('A command was used in the server.')
+        .setColor(0x2B017F)
+        .setFields(fields)
+        .setFooter({ text: message.guild ? message.guild.name : 'DM', iconURL: message.guild?.iconURL() || undefined })
+        .setTimestamp();
+}
+
+async function logCommand(message, command, args, targetUserId = null) {
+    if (!LOG_CHANNEL_ID) return;
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    if (!logChannel || !logChannel.send) return;
+    const embed = createLogEmbed(message, command, args, targetUserId);
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function logInteractionCommand(interaction, command, targetUserId = null, additionalFields = []) {
+    if (!LOG_CHANNEL_ID) return;
+    const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+    if (!logChannel || !logChannel.send) return;
+    
+    const fields = [
+        { name: 'Command', value: `\`/${command}\``, inline: true },
+        { name: 'Author', value: `${interaction.user.toString()} (\`${interaction.user.id}\`)`, inline: true },
+        { name: 'Channel', value: `${interaction.channel?.toString() || 'DM'}`, inline: true }
+    ];
+    if (targetUserId) {
+        fields.push({ name: 'Target', value: `<@${targetUserId}>`, inline: true });
+    }
+    fields.push(...additionalFields);
+    
+    const embed = new EmbedBuilder()
+        .setTitle('Command Log')
+        .setDescription('A command was used in the server.')
+        .setColor(0x2B017F)
+        .setFields(fields)
+        .setFooter({ text: interaction.guild?.name || 'DM', iconURL: interaction.guild?.iconURL() || undefined })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
 }
 
 function createConfirmationEmbed(action, targetUser, moderator) {
@@ -121,6 +180,18 @@ function getUserIdFromInput(input) {
     if (/^\d{17,20}$/.test(id)) {
         return id;
     }
+    return null;
+}
+
+async function resolveUserIdFromCommand(message, input) {
+    const explicitId = getUserIdFromInput(input);
+    if (explicitId) return explicitId;
+
+    if (message.reference?.messageId) {
+        const referenced = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+        return referenced?.author?.id || null;
+    }
+
     return null;
 }
 
@@ -603,6 +674,7 @@ client.on('messageCreate', async (message) => {
             .setColor(0x00FF00)
             .setTimestamp();
         await message.reply({ embeds: [afkEmbed] });
+        await logCommand(message, command, args);
     }
 
     // GIVEAWAY COMMANDS
@@ -771,7 +843,7 @@ client.on('messageCreate', async (message) => {
             const targetInput = args[1];
             if (!targetInput) return message.reply('❌ Please mention a user to transfer this ticket to. Example: `.ticket transfer @user`');
             if (!message.member.roles.cache.has(supportRoleId)) return message.reply('❌ You need the Support role to transfer tickets.');
-            const targetUserId = getUserIdFromInput(targetInput);
+            const targetUserId = await resolveUserIdFromCommand(message, targetInput);
             if (!targetUserId) return message.reply('❌ Invalid user.');
             const targetMember = await message.guild.members.fetch(targetUserId).catch(() => null);
             if (!targetMember) return message.reply('❌ Could not find that user.');
@@ -911,10 +983,14 @@ client.on('messageCreate', async (message) => {
         const targetInput = args[0];
         let targetUser = message.mentions.users.first();
         if (!targetUser && targetInput) {
-            const possibleId = getUserIdFromInput(targetInput);
+            const possibleId = await resolveUserIdFromCommand(message, targetInput);
             if (possibleId) {
                 targetUser = await client.users.fetch(possibleId).catch(() => null);
             }
+        }
+        if (!targetUser && message.reference?.messageId) {
+            const referenced = await message.channel.messages.fetch(message.reference.messageId).catch(() => null);
+            if (referenced) targetUser = referenced.author;
         }
         if (!targetUser) targetUser = message.author;
 
@@ -949,8 +1025,8 @@ client.on('messageCreate', async (message) => {
     // PROMOTE COMMAND
     if (command === 'promote') {
         const targetMention = args[0];
-        if (!targetMention) return message.reply('Please mention a user to promote. Example: `.promote @user` or `.promote @user RoleName`');
-        const userId = targetMention.replace(/[<@!>]/g, '');
+        const userId = await resolveUserIdFromCommand(message, targetMention);
+        if (!userId) return message.reply('Please mention a user to promote. Example: `.promote @user` or reply to a user with `.promote RoleName`.');
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
         if (!targetMember) return message.reply('Could not find user.');
         if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) return message.reply('You need **Manage Roles** permission to promote someone.');
@@ -981,6 +1057,7 @@ client.on('messageCreate', async (message) => {
                 await targetMember.roles.add(targetRole, `Promoted by ${message.author.tag}`);
                 const embed = new EmbedBuilder().setTitle('LawsHub Promotion').setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n**Current role:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`).setColor(0x00FF00);
                 await message.reply({ embeds: [embed] });
+                await logCommand(message, command, args, userId);
             } catch (error) { await message.reply('Failed to promote user.'); }
         } else {
             const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
@@ -1004,6 +1081,7 @@ client.on('messageCreate', async (message) => {
                 await targetMember.roles.add(nextRole, `Promoted by ${message.author.tag}`);
                 const embed = new EmbedBuilder().setTitle('LawsHub Promotion').setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n**Current role:** ${nextRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`).setColor(0x00FF00);
                 await message.reply({ embeds: [embed] });
+                await logCommand(message, command, args, userId);
             } catch (error) { await message.reply('Failed to promote user.'); }
         }
     }
@@ -1011,8 +1089,8 @@ client.on('messageCreate', async (message) => {
     // DEMOTE COMMAND
     if (command === 'demote') {
         const targetMention = args[0];
-        if (!targetMention) return message.reply('Please mention a user to demote. Example: `.demote @user` or `.demote @user RoleName`');
-        const userId = targetMention.replace(/[<@!>]/g, '');
+        const userId = await resolveUserIdFromCommand(message, targetMention);
+        if (!userId) return message.reply('Please mention a user to demote. Example: `.demote @user` or reply to a user with `.demote RoleName`.');
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
         if (!targetMember) return message.reply('Could not find user.');
         if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) return message.reply('You need **Manage Roles** permission to demote someone.');
@@ -1042,6 +1120,7 @@ client.on('messageCreate', async (message) => {
                 for (const role of rolesToRemove.values()) await targetMember.roles.remove(role, `Demoted by ${message.author.tag}`);
                 const embed = new EmbedBuilder().setTitle('LawsHub Demotion').setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Removed Roles:** ${removedRoleNames}\n**Demoted down to:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`).setColor(0xFF0000);
                 await message.reply({ embeds: [embed] });
+                await logCommand(message, command, args, userId);
             } catch (error) { await message.reply('Failed to demote user.'); }
         } else {
             const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
@@ -1061,6 +1140,7 @@ client.on('messageCreate', async (message) => {
                 await targetMember.roles.remove(lowestUserRole);
                 const embed = new EmbedBuilder().setTitle('LawsHub Demotion').setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${lowestUserRole.name}\n**Current role:** ${roleToGive.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`).setColor(0xFF0000);
                 await message.reply({ embeds: [embed] });
+                await logCommand(message, command, args, userId);
             } catch (error) { await message.reply('Failed to demote user.'); }
         }
     }
@@ -1070,7 +1150,7 @@ client.on('messageCreate', async (message) => {
         const userInput = args[0];
         const newNickname = args.slice(1).join(' ');
         if (!userInput || !newNickname) return message.reply(`<:unknown:1495103708957118684> Please provide a user and nickname. Example: \`.fn @user DesiredNickname\``);
-        const userId = getUserIdFromInput(userInput);
+        const userId = await resolveUserIdFromCommand(message, userInput);
         if (!userId) return message.reply(`<:unknown:1495103708957118684> Invalid user ID.`);
         if (userId === message.author.id) return message.reply(`<:unknown:1495103708957118684> You cannot force your own nickname.`);
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
@@ -1088,6 +1168,7 @@ client.on('messageCreate', async (message) => {
             await targetMember.setNickname(newNickname, `Forced by ${message.author.tag}`);
             forcedNicknames.set(targetMember.id, { nickname: newNickname, moderator: message.author.tag });
             await message.reply(`<a:unknown:1495084306781962432> Forced nicknamed ${targetMember.user.toString()} to **${newNickname}**`);
+            await logCommand(message, command, args, userId);
         } catch (error) { await message.reply(`<:unknown:1495103708957118684> Failed to force nickname.`); }
     }
 
@@ -1095,7 +1176,7 @@ client.on('messageCreate', async (message) => {
     if (command === 'rfn') {
         const userInput = args[0];
         if (!userInput) return message.reply(`<:unknown:1495103708957118684> Please provide a user. Example: \`.rfn @user\``);
-        const userId = getUserIdFromInput(userInput);
+        const userId = await resolveUserIdFromCommand(message, userInput);
         if (!userId) return message.reply(`<:unknown:1495103708957118684> Invalid user ID.`);
         if (!message.member.permissions.has(PermissionFlagsBits.ManageNicknames)) return message.reply(`<:unknown:1495103708957118684> You need **Manage Nicknames** permission to remove forced nicknames.`);
         if (!forcedNicknames.has(userId)) return message.reply(`<:unknown:1495103708957118684> This user does not have a forced nickname.`);
@@ -1104,15 +1185,16 @@ client.on('messageCreate', async (message) => {
         try {
             forcedNicknames.delete(userId);
             if (targetMember) try { await targetMember.setNickname(null, `Forced nickname removed by ${message.author.tag}`); } catch (nickError) {}
-            await message.reply(`<a:unknown:1495084306781962432> Removed forced nickname from ${targetMember ? targetMember.user.toString() : `user ${userId}`} (was **${forcedData.nickname}**)`);
+            await message.reply(`<a:unknown:1495084306781962432> Removed forced nickname from ${targetMember ? targetMember.user.toString() : `user ${userId}`} (was **${forcedData.nickname}**`);
+            await logCommand(message, command, args, userId);
         } catch (error) { await message.reply(`<:unknown:1495103708957118684> Failed to remove forced nickname.`); }
     }
 
     // CLEAR WARNS COMMAND (.cw)
     if (command === 'cw') {
         const userInput = args[0];
-        if (!userInput) return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a user to clear warnings. Example: `.cw @user` or `.cw 123456789012345678`')] });
-        const userId = getUserIdFromInput(userInput);
+        if (!userInput) return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a user to clear warnings. Example: `.cw @user` or `.cw 123456789012345678` or reply to their message.')] });
+        const userId = await resolveUserIdFromCommand(message, userInput);
         if (!userId) return message.reply({ embeds: [createErrorEmbed('Error', 'Invalid user ID.')] });
         if (userId === message.author.id) return message.reply({ embeds: [createErrorEmbed('Error', 'You cannot clear your own warnings.')] });
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Administrator** permission to clear warnings.')] });
@@ -1122,13 +1204,14 @@ client.on('messageCreate', async (message) => {
         saveWarnings();
         const embed = createSuccessEmbed('Warnings Cleared', `**User:** <@${userId}>\n**Warnings Removed:** ${warnCount}\n\n**Cleared by:** ${message.author.toString()}`);
         await message.reply({ embeds: [embed] });
+        await logCommand(message, command, args, userId);
     }
 
     // WIPE COMMAND
     if (command === 'wipe') {
         const targetMention = args[0];
-        if (!targetMention) return message.reply('Please mention a user. Example: `.wipe @user`');
-        const userId = targetMention.replace(/[<@!>]/g, '');
+        const userId = await resolveUserIdFromCommand(message, targetMention);
+        if (!userId) return message.reply('Please mention a user. Example: `.wipe @user` or reply to their message.');
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
         if (!targetMember) return message.reply('Could not find user.');
         if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) return message.reply('You need **Manage Roles** permission.');
@@ -1145,14 +1228,15 @@ client.on('messageCreate', async (message) => {
             await targetMember.roles.set([], `Wiped by ${message.author.tag} (${message.author.id})`);
             const embed = new EmbedBuilder().setTitle('LawsHub Wipe').setDescription(`**User Wiped** ${targetMember.user.toString()}\n\n**Roles Removed:** ${rolesToBackup.size}\n**Removed Roles:** ${roleNames}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`).setColor(0xFFA500);
             await message.reply({ embeds: [embed] });
+            await logCommand(message, command, args, userId);
         } catch (error) { await message.reply('Failed to wipe roles.'); }
     }
 
     // UNWIPE COMMAND
     if (command === 'unwipe') {
         const targetMention = args[0];
-        if (!targetMention) return message.reply('Please mention a user. Example: `.unwipe @user`');
-        const userId = targetMention.replace(/[<@!>]/g, '');
+        const userId = await resolveUserIdFromCommand(message, targetMention);
+        if (!userId) return message.reply('Please mention a user. Example: `.unwipe @user` or reply to their message.');
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
         if (!targetMember) return message.reply('Could not find user.');
         if (!message.member.permissions.has(PermissionFlagsBits.ManageRoles)) return message.reply('You need **Manage Roles** permission.');
@@ -1170,6 +1254,7 @@ client.on('messageCreate', async (message) => {
             roleBackups.delete(targetMember.id);
             const embed = new EmbedBuilder().setTitle('LawsHub Unwipe').setDescription(`**User Unwiped** ${targetMember.user.toString()}\n\n**Roles Restored:** ${rolesToRestore.length}\n**Restored Roles:** ${roleNames.join(', ')}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${message.author.toString()}`).setColor(0x00FF00);
             await message.reply({ embeds: [embed] });
+            await logCommand(message, command, args, userId);
         } catch (error) { await message.reply('Failed to restore roles.'); }
     }
 
@@ -1178,7 +1263,7 @@ client.on('messageCreate', async (message) => {
         const userInput = args[0];
         const reason = getReason(args.slice(1));
         if (!userInput) return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a user ID or mention a user to jail. Example: `.jail @user reason here`')] });
-        const userId = getUserIdFromInput(userInput);
+        const userId = await resolveUserIdFromCommand(message, userInput);
         if (!userId) return message.reply({ embeds: [createErrorEmbed('Error', 'Invalid user ID or mention.')] });
         if (userId === message.author.id) return message.reply({ embeds: [createErrorEmbed('Error', 'You cannot jail yourself.')] });
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
@@ -1215,7 +1300,7 @@ client.on('messageCreate', async (message) => {
     if (command === 'unjail') {
         const targetMention = args[0];
         if (!targetMention) return message.reply('Please mention a user to unjail. Example: `.unjail @user`');
-        const userId = targetMention.replace(/[<@!>]/g, '');
+        const userId = await resolveUserIdFromCommand(message, targetMention);
         const targetMember = await message.guild.members.fetch(userId).catch(() => null);
         if (!targetMember) return message.reply('Could not find user.');
         if (!message.member.permissions.has(PermissionFlagsBits.ModerateMembers)) return message.reply('You need **Moderate Members** permission to unjail someone.');
@@ -1264,6 +1349,7 @@ client.on('messageCreate', async (message) => {
             await targetChannel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false, AddReactions: false, CreatePublicThreads: false, CreatePrivateThreads: false, SendMessagesInThreads: false });
             const embed = new EmbedBuilder().setTitle('🔒 Channel Locked').setDescription(`**Channel:** ${targetChannel.toString()}\n**Moderator:** ${message.author.toString()}\n**Reason:** ${reason}\n\nUse \`.unlock\` to restore original permissions.`).setColor(0xFFA500).setTimestamp();
             await message.reply({ embeds: [embed] });
+            await logCommand(message, command, args);
         } catch (error) { await message.reply(`<:unknown:1495103708957118684> Failed to lock channel.`); }
     }
 
@@ -1286,6 +1372,7 @@ client.on('messageCreate', async (message) => {
             } else { await targetChannel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null, AddReactions: null, CreatePublicThreads: null, CreatePrivateThreads: null, SendMessagesInThreads: null }); }
             const embed = new EmbedBuilder().setTitle('🔓 Channel Unlocked').setDescription(`**Channel:** ${targetChannel.toString()}\n**Moderator:** ${message.author.toString()}\n**Reason:** ${reason}\n\nOriginal permissions have been restored.`).setColor(0x00FF00).setTimestamp();
             await message.reply({ embeds: [embed] });
+            await logCommand(message, command, args);
         } catch (error) { await message.reply(`<:unknown:1495103708957118684> Failed to unlock channel.`); }
     }
 
@@ -1312,6 +1399,7 @@ client.on('messageCreate', async (message) => {
             const sentMsg = await message.channel.send({ embeds: [embed] });
             setTimeout(() => sentMsg.delete().catch(() => {}), 5000);
             await message.delete().catch(() => {});
+            await logCommand(message, command, args);
         } catch (error) {
             console.error(error);
             message.reply({ embeds: [createErrorEmbed('Error', 'Failed to purge messages. Messages may be older than 14 days.')] }).then(msg => setTimeout(() => msg.delete().catch(() => {}), 5000));
@@ -1338,7 +1426,7 @@ client.on('messageCreate', async (message) => {
         if (!botMember.permissions.has(PermissionFlagsBits.ManageMessages)) {
             return message.reply({ embeds: [createErrorEmbed('Error', 'I need **Manage Messages** permission to purge messages.')] }).then(msg => setTimeout(() => msg.delete().catch(() => {}), 5000));
         }
-        const userId = getUserIdFromInput(userInput);
+        const userId = await resolveUserIdFromCommand(message, userInput);
         if (!userId) {
             return message.reply({ embeds: [createErrorEmbed('Error', 'Invalid user.')] }).then(msg => setTimeout(() => msg.delete().catch(() => {}), 5000));
         }
@@ -1358,6 +1446,7 @@ client.on('messageCreate', async (message) => {
             const sentMsg = await message.channel.send({ embeds: [embed] });
             setTimeout(() => sentMsg.delete().catch(() => {}), 5000);
             await message.delete().catch(() => {});
+            await logCommand(message, command, args, userId);
         } catch (error) {
             console.error(error);
             message.reply({ embeds: [createErrorEmbed('Error', 'Failed to purge user messages. Messages may be older than 14 days.')] }).then(msg => setTimeout(() => msg.delete().catch(() => {}), 5000));
@@ -1403,7 +1492,7 @@ client.on('messageCreate', async (message) => {
 
     // UNBAN COMMAND (with confirmation)
     if (command === 'unban') {
-        const userId = getUserIdFromInput(args[0]);
+        const userId = await resolveUserIdFromCommand(message, args[0]);
         if (!userId) return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a valid user ID to unban. Example: `.unban 123456789012345678`')] });
         if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Ban Members** permission to unban someone.')] });
         try {
@@ -1427,13 +1516,13 @@ client.on('messageCreate', async (message) => {
                         .setStyle(ButtonStyle.Danger)
                 );
             const confirmMsg = await message.reply({ embeds: [confirmEmbed], components: [confirmRow] });
-            pendingActions.set(confirmationId, { action: 'unban', targetUserId: userId, targetUserTag: unbannedUser.tag, reason: 'No reason provided', originalCommandAuthorId: message.author.id, originalCommandId: message.id, guildId: message.guild.id, channelId: message.channel.id });
+            pendingActions.set(confirmationId, { action: 'unban', targetUserId: userId, targetUserTag: unbannedUser.tag, reason: 'No reason provided', originalCommandAuthorId: message.author.id, originalCommandId: message.id, guildId: message.guild.id, channelId: message.channel.id, logCommand: true });
         } catch (error) { await message.reply({ embeds: [createErrorEmbed('Error', 'Failed to find banned user.')] }); }
     }
 
     // IUNBAN COMMAND (with confirmation)
     if (command === 'iunban') {
-        const userId = getUserIdFromInput(args[0]);
+        const userId = await resolveUserIdFromCommand(message, args[0]);
         if (!userId) return message.reply({ embeds: [createErrorEmbed('Error', 'Please provide a valid user ID to unban. Example: `.iunban 123456789012345678`')] });
         if (!message.member.permissions.has(PermissionFlagsBits.BanMembers)) return message.reply({ embeds: [createErrorEmbed('Error', 'You need **Ban Members** permission to unban someone.')] });
         try {
@@ -1457,7 +1546,7 @@ client.on('messageCreate', async (message) => {
                         .setStyle(ButtonStyle.Danger)
                 );
             const confirmMsg = await message.reply({ embeds: [confirmEmbed], components: [confirmRow] });
-            pendingActions.set(confirmationId, { action: 'iunban', targetUserId: userId, targetUserTag: unbannedUser.tag, reason: 'No reason provided', originalCommandAuthorId: message.author.id, originalCommandId: message.id, guildId: message.guild.id, channelId: message.channel.id });
+            pendingActions.set(confirmationId, { action: 'iunban', targetUserId: userId, targetUserTag: unbannedUser.tag, reason: 'No reason provided', originalCommandAuthorId: message.author.id, originalCommandId: message.id, guildId: message.guild.id, channelId: message.channel.id, logCommand: true });
         } catch (error) { await message.reply({ embeds: [createErrorEmbed('Error', 'Failed to find banned user.')] }); }
     }
 
@@ -1541,6 +1630,7 @@ client.on('messageCreate', async (message) => {
             await targetMember.timeout(milliseconds, `Muted by ${message.author.tag}: ${reason}`);
             const embed = createSuccessEmbed('User Muted', `**User:** ${targetMember.user.toString()}\n\n**Moderator:** ${message.author.toString()}\n\n**Duration:** ${durationText}\n\n**Reason:** ${reason}`);
             await message.reply({ embeds: [embed] });
+            await logCommand(message, command, args, userId);
         } catch (error) { await message.reply({ embeds: [createErrorEmbed('Error', 'Failed to mute user.')] }); }
     }
 
@@ -1558,6 +1648,7 @@ client.on('messageCreate', async (message) => {
             await targetMember.timeout(null, `Unmuted by ${message.author.tag}`);
             const embed = createSuccessEmbed('User Unmuted', `**User:** ${targetMember.user.toString()}\n\n**Moderator:** ${message.author.toString()}`);
             await message.reply({ embeds: [embed] });
+            await logCommand(message, command, args, userId);
         } catch (error) { await message.reply({ embeds: [createErrorEmbed('Error', 'Failed to unmute user.')] }); }
     }
 
@@ -1587,6 +1678,7 @@ client.on('messageCreate', async (message) => {
         let actionMessage = actionTaken ? `\n\n⚠️ **Auto-action triggered at ${warnCount} warnings!**` : '';
         const embed = createSuccessEmbed('User Warned', `**User:** ${targetMember ? targetMember.user.toString() : `Unknown User (ID: ${userId})`}\n\n**Moderator:** ${message.author.toString()}\n\n**Reason:** ${reason}\n\n**Warning ID:** ${warnId}\n\n**Total Warnings:** ${warnCount}${actionMessage}`);
         await message.reply({ embeds: [embed] });
+        await logCommand(message, command, args, userId);
     }
 
     // UNWARN COMMAND
@@ -1609,6 +1701,7 @@ client.on('messageCreate', async (message) => {
         saveWarnings();
         const embed = createSuccessEmbed('Warning Removed', `**User:** ${removedWarn.userName}\n\n**Removed Warning ID:** ${warnId}\n\n**Original Reason:** ${removedWarn.reason}\n\n**Original Moderator:** ${removedWarn.moderator}\n\n**Removed by:** ${message.author.toString()}\n\n**Remaining Warnings:** ${userWarns.length}`);
         await message.reply({ embeds: [embed] });
+        await logCommand(message, command, args, userId);
     }
 
     // WARNS COMMAND
@@ -1616,7 +1709,7 @@ client.on('messageCreate', async (message) => {
         let targetUserId = message.author.id;
         let targetUserName = message.author.tag;
         if (args[0]) {
-            const userId = getUserIdFromInput(args[0]);
+            const userId = await resolveUserIdFromCommand(message, args[0]);
             if (userId) {
                 targetUserId = userId;
                 const targetMember = await message.guild.members.fetch(userId).catch(() => null);
@@ -2004,6 +2097,7 @@ client.on('interactionCreate', async (interaction) => {
                         await targetMember.roles.add(targetRole, `Promoted by ${interaction.user.tag}`);
                         const embed = new EmbedBuilder().setTitle('LawsHub Promotion').setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n**Current role:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${interaction.user.toString()}`).setColor(0x00FF00);
                         await interaction.reply({ embeds: [embed] });
+                        await logInteractionCommand(interaction, 'promote', userId);
                     } catch (error) { await interaction.reply({ content: 'Failed to promote user.', ephemeral: true }); }
                 } else {
                     const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
@@ -2027,6 +2121,7 @@ client.on('interactionCreate', async (interaction) => {
                         await targetMember.roles.add(nextRole, `Promoted by ${interaction.user.tag}`);
                         const embed = new EmbedBuilder().setTitle('LawsHub Promotion').setDescription(`**User Promoted** ${targetMember.user.toString()}\n\n**Previous role:** ${oldRoleName}\n**Current role:** ${nextRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${interaction.user.toString()}`).setColor(0x00FF00);
                         await interaction.reply({ embeds: [embed] });
+                        await logInteractionCommand(interaction, 'promote', userId);
                     } catch (error) { await interaction.reply({ content: 'Failed to promote user.', ephemeral: true }); }
                 }
                 break;
@@ -2065,6 +2160,7 @@ client.on('interactionCreate', async (interaction) => {
                         for (const role of rolesToRemove.values()) await targetMember.roles.remove(role, `Demoted by ${interaction.user.tag}`);
                         const embed = new EmbedBuilder().setTitle('LawsHub Demotion').setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Removed Roles:** ${removedRoleNames}\n**Demoted down to:** ${targetRole.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${interaction.user.toString()}`).setColor(0xFF0000);
                         await interaction.reply({ embeds: [embed] });
+                        await logInteractionCommand(interaction, 'demote', userId);
                     } catch (error) { await interaction.reply({ content: 'Failed to demote user.', ephemeral: true }); }
                 } else {
                     const userRoles = targetMember.roles.cache.filter(role => role.name !== '@everyone');
@@ -2084,6 +2180,7 @@ client.on('interactionCreate', async (interaction) => {
                         await targetMember.roles.remove(lowestUserRole);
                         const embed = new EmbedBuilder().setTitle('LawsHub Demotion').setDescription(`**User Demoted** ${targetMember.user.toString()}\n\n**Previous role:** ${lowestUserRole.name}\n**Current role:** ${roleToGive.name}\n\n**Time:** ${new Date().toLocaleString()}\n**Moderator:** ${interaction.user.toString()}`).setColor(0xFF0000);
                         await interaction.reply({ embeds: [embed] });
+                        await logInteractionCommand(interaction, 'demote', userId);
                     } catch (error) { await interaction.reply({ content: 'Failed to demote user.', ephemeral: true }); }
                 }
                 break;
@@ -2110,6 +2207,7 @@ client.on('interactionCreate', async (interaction) => {
                     await targetMember.setNickname(newNickname, `Forced by ${interaction.user.tag}`);
                     forcedNicknames.set(targetMember.id, { nickname: newNickname, moderator: interaction.user.tag });
                     await interaction.reply({ content: `<a:unknown:1495084306781962432> Forced nicknamed ${targetMember.user.toString()} to **${newNickname}**` });
+                    await logInteractionCommand(interaction, 'fn', userId);
                 } catch (error) { await interaction.reply({ content: '<:unknown:1495103708957118684> Failed to force nickname.', ephemeral: true }); }
                 break;
             }
@@ -2126,6 +2224,7 @@ client.on('interactionCreate', async (interaction) => {
                     forcedNicknames.delete(userId);
                     if (targetMember) try { await targetMember.setNickname(null, `Forced nickname removed by ${interaction.user.tag}`); } catch (nickError) {}
                     await interaction.reply({ content: `<a:unknown:1495084306781962432> Removed forced nickname from ${targetMember ? targetMember.user.toString() : `user ${userId}`} (was **${forcedData.nickname}**)` });
+                    await logInteractionCommand(interaction, 'rfn', userId);
                 } catch (error) { await interaction.reply({ content: '<:unknown:1495103708957118684> Failed to remove forced nickname.', ephemeral: true }); }
                 break;
             }
@@ -2898,6 +2997,26 @@ Transferred by: ${interaction.user.toString()}`).setColor(0xFFA500);
                 default: return interaction.reply({ content: 'Unknown action.', ephemeral: true });
             }
             await interaction.update({ embeds: [successEmbed], components: [] });
+            // Log the command if requested
+            if (pendingData.logCommand || true) {
+                const logChannel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+                if (logChannel && logChannel.send) {
+                    const logEmbed = new EmbedBuilder()
+                        .setTitle('Command Log')
+                        .setDescription('A command was used in the server.')
+                        .setColor(0x2B017F)
+                        .setFields([
+                            { name: 'Command', value: `\`.${action}\``, inline: true },
+                            { name: 'Author', value: `${interaction.user.toString()} (\`${interaction.user.id}\`)`, inline: true },
+                            { name: 'Channel', value: `<#${pendingData.channelId}>`, inline: true },
+                            { name: 'Target', value: `<@${pendingData.targetUserId}>`, inline: true },
+                            { name: 'Reason', value: pendingData.reason || 'No reason provided', inline: false }
+                        ])
+                        .setFooter({ text: interaction.guild.name, iconURL: interaction.guild.iconURL() || undefined })
+                        .setTimestamp();
+                    await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+                }
+            }
             // Delete the original command message after 5 seconds
             if (pendingData.originalCommandId) {
                 const originalChannel = await interaction.guild.channels.fetch(pendingData.channelId).catch(() => null);
