@@ -15,6 +15,8 @@ const client = new Client({
 
 const PREFIX = '.';
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID || '1496845514208051291';
+
+const OWNER_IDS = ['1413103929931337751', '856260234342039682', '1329319330034221057', '1402004904620327042', '1280573177881297059', '1506834966229549056'];
 const roleBackups = new Map();
 const jailBackups = new Map();
 const forcedNicknames = new Map();
@@ -541,6 +543,47 @@ const startTime = Date.now();
 client.once('ready', async () => {
     console.log(`${client.user.tag} is online!`);
     console.log(`📦 Loaded ${activeGiveaways.size} active giveaways`);
+    // Register `roleall` slash command in each guild the bot is in (owner-only)
+    try {
+        const roleAllCommand = {
+            name: 'roleall',
+            description: 'Add or remove a role for all members (owner-only)',
+            options: [
+                {
+                    name: 'action',
+                    type: 3,
+                    description: 'add or remove',
+                    required: true,
+                    choices: [
+                        { name: 'add', value: 'add' },
+                        { name: 'remove', value: 'remove' }
+                    ]
+                },
+                {
+                    name: 'role',
+                    type: 8,
+                    description: 'Role to add or remove',
+                    required: true
+                },
+                {
+                    name: 'exclude_bots',
+                    type: 5,
+                    description: 'Exclude bots from this operation',
+                    required: false
+                }
+            ]
+        };
+        for (const guild of client.guilds.cache.values()) {
+            try {
+                await guild.commands.create(roleAllCommand);
+                console.log(`Registered roleall command in guild ${guild.id}`);
+            } catch (err) {
+                console.error(`Failed to register roleall in guild ${guild.id}:`, err);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to register roleall command:', err);
+    }
 });
 
 client.on('guildMemberUpdate', async (oldMember, newMember) => {
@@ -1999,6 +2042,39 @@ client.on('interactionCreate', async (interaction) => {
                     setTimeout(async () => { try { await interaction.channel.delete(`Closed by ${interaction.user.tag}: ${reason}`); } catch (err) {} }, 5000);
                 }
                 break;
+            }
+
+            case 'roleall': {
+                if (!OWNER_IDS.includes(interaction.user.id)) {
+                    return interaction.reply({ content: 'Only the bot owner(s) can use this command.', ephemeral: true });
+                }
+                const action = options.getString('action'); // 'add' or 'remove'
+                const role = options.getRole('role');
+                const excludeBots = options.getBoolean('exclude_bots') || false;
+                if (!action || !role) return interaction.reply({ content: 'Usage: /roleall action:<add|remove> role:<role> [exclude_bots:true]', ephemeral: true });
+                await interaction.reply({ content: `Starting to ${action} role **${role.name}** for all members. This may take a while...`, ephemeral: true });
+                try {
+                    await interaction.guild.members.fetch();
+                    const members = interaction.guild.members.cache.filter(m => !(excludeBots && m.user.bot));
+                    let succeeded = 0;
+                    let failed = 0;
+                    for (const member of members.values()) {
+                        try {
+                            if (action === 'add') {
+                                if (!member.roles.cache.has(role.id)) await member.roles.add(role, `roleall by ${interaction.user.tag}`);
+                            } else {
+                                if (member.roles.cache.has(role.id)) await member.roles.remove(role, `roleall by ${interaction.user.tag}`);
+                            }
+                            succeeded++;
+                        } catch (err) {
+                            failed++;
+                        }
+                    }
+                    return interaction.followUp({ content: `Completed. Succeeded: ${succeeded}, Failed: ${failed}`, ephemeral: true });
+                } catch (error) {
+                    console.error('roleall failed:', error);
+                    return interaction.followUp({ content: 'An error occurred while performing the operation.', ephemeral: true });
+                }
             }
 
             case 'say': {
