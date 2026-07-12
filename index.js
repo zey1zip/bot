@@ -3136,3 +3136,13 @@ Transferred by: ${interaction.user.toString()}`).setColor(0xFFA500);
 
 const token = process.env.DISCORD_TOKEN
 client.login(token);
+
+// ========== HEALTH SERVER (for platform health checks) ==========
+const http = require('http');
+const HEALTH_PORT = process.env.PORT || 8000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', bot: client.isReady() ? 'online' : 'connecting' }));
+}).listen(HEALTH_PORT, '0.0.0.0', () => {
+    console.log(`Health server listening on port ${HEALTH_PORT}`);
+});
